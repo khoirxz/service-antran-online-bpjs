@@ -1,0 +1,77 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model PollingState {
+  id              BigInt    @id @default(autoincrement())
+  source          String    @unique @db.VarChar(50)
+  last_event_time DateTime  @db.Timestamp(6)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime? @updatedAt
+}
+
+model VisitEvent {
+  id         BigInt         @id @default(autoincrement())
+  visit_id   String         @db.VarChar(50) // no rawat
+  event_type VisitEventType // not null
+  event_time DateTime
+  is_jkn     Boolean        @default(false)
+  payload    Json?
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime?      @updatedAt
+
+  @@unique([visit_id, event_type])
+  @@index([event_time])
+}
+
+model BpjsAntreanQueue {
+  id          BigInt    @id @default(autoincrement())
+  visit_id    String    @db.VarChar(50) // no rawat
+  task_id     Int
+  event_time  DateTime
+  payload     Json?
+  status      Status
+  retry_count Int       @default(0)
+  last_error  String?
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime? @updatedAt
+
+  @@unique([visit_id, task_id])
+  @@index([status])
+}
+
+model BpjsAntreanLogs {
+  id               BigInt    @id @default(autoincrement())
+  queue_id         BigInt
+  request_payload  Json
+  response_payload Json
+  http_code        Int
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime? @updatedAt
+
+  @@index([queue_id])
+}
+
+enum VisitEventType {
+  REGISTER
+  CHECKIN
+  START
+  FINISH
+}
+
+enum Status {
+  PENDING
+  SEND
+  FAILED
+}
