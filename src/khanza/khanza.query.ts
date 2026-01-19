@@ -50,8 +50,8 @@ export async function fetchRegisterEvents(lastDate: string, lastTime: string) {
     AND (rp.tgl_registrasi > ? OR (rp.tgl_registrasi = ? AND rp.jam_reg > ?))
     AND rp.jenis_kunjungan IS NOT NULL
     ORDER BY
-      rp.tgl_registrasi DESC,
-      rp.jam_reg DESC
+      rp.tgl_registrasi,
+      rp.jam_reg
     LIMIT 100
     `,
     [lastDate, lastDate, lastTime],
@@ -64,7 +64,7 @@ export async function fetchRegisterEvents(lastDate: string, lastTime: string) {
     jam_registrasi: string;
     nama_hari: string;
     jam_reg: string;
-    kd_dokter: number;
+    kd_dokter: string;
     nama_dokter: string;
     no_rkm_medis: string;
     kd_poli: string;
@@ -94,5 +94,46 @@ export async function fetchTaskId(taskId: 3 | 4 | 5, lastEventTime: string) {
   return rows as {
     no_rawat: string;
     event_time: string;
+  }[];
+}
+
+export async function aggregateRegisterEventsByPoliDokterTanggal(
+  tanggal: string,
+  poliId: string,
+  dokterId: string,
+) {
+  const [rows] = await khanzaDb.query(
+    `SELECT rp.kd_poli, mp.nm_poli_bpjs as nama_poli,
+    rp.tgl_registrasi as tanggal, j.jam_mulai, j.jam_selesai,
+    j.kuota as kuota_jkn, COUNT(rp.no_reg) as total_register
+    FROM reg_periksa rp 
+    LEFT JOIN maping_poli_bpjs mp ON rp.kd_poli = mp.kd_poli_bpjs 
+    LEFT JOIN jadwal j ON rp.kd_dokter = j.kd_dokter 
+      AND rp.kd_poli = j.kd_poli 
+      AND CASE DAYOFWEEK(rp.tgl_registrasi)
+        WHEN 1 THEN 'MINGGU'
+        WHEN 2 THEN 'SENIN'
+        WHEN 3 THEN 'SELASA'
+        WHEN 4 THEN 'RABU'
+        WHEN 5 THEN 'KAMIS'
+        WHEN 6 THEN 'JUMAT'
+        WHEN 7 THEN 'SABTU'
+      END = j.hari_kerja
+    WHERE rp.tgl_registrasi = ? 
+    AND rp.kd_poli = ? 
+    AND rp.kd_dokter = ? 
+    GROUP BY rp.kd_poli, mp.nm_poli_bpjs, rp.tgl_registrasi, j.jam_mulai, j.jam_selesai, j.kuota
+    `,
+    [tanggal, poliId, dokterId],
+  );
+
+  return rows as {
+    kd_poli: string;
+    nama_poli: string;
+    tanggal: string;
+    jam_mulai: string;
+    jam_selesai: string;
+    kuota_jkn: number;
+    total_register: number;
   }[];
 }

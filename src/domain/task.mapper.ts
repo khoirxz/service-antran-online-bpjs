@@ -1,4 +1,4 @@
-import { EventType } from "./event.model";
+import { EventType } from "./visit-event.model";
 
 export function mapEventToTaskId(eventType: EventType): number {
   switch (eventType) {

@@ -11,6 +11,7 @@ export async function buildQueue() {
   const dbEvents = await prisma.visitEvent.findMany({
     where: {
       is_jkn: true,
+      status: "READY_BPJS", // Hanya ambil yang sudah valid
     },
     orderBy: {
       event_time: "asc",
@@ -52,7 +53,7 @@ export async function buildQueue() {
       });
     } catch (error) {
       console.warn(
-        `Skipping event ${event.id} for BPJS queue: ${(error as Error).message}`
+        `Skipping event ${event.id} for BPJS queue: ${(error as Error).message}`,
       );
     }
   }

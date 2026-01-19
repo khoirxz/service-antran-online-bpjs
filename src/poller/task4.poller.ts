@@ -23,6 +23,10 @@ export async function pollTaskId4Event() {
           visit_id: row.no_rawat,
           event_type: "START",
           event_time: event_time,
+          tanggal: new Date(event_time.toISOString().slice(0, 10)),
+          jam_registrasi: "00:00",
+          poli_id: "",
+          dokter_id: "",
           is_jkn: true,
         },
       });

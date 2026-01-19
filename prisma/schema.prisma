@@ -24,14 +24,34 @@ model VisitEvent {
   id         BigInt         @id @default(autoincrement())
   visit_id   String         @db.VarChar(50) // no rawat
   event_type VisitEventType // not null
-  event_time DateTime
-  is_jkn     Boolean        @default(false)
-  payload    Json?
-  createdAt  DateTime       @default(now())
-  updatedAt  DateTime?      @updatedAt
+  event_time DateTime // Waktu event terjadi di sistem sumber
+
+  // Dimensi Agregasi
+  tanggal        DateTime // start of day
+  jam_registrasi String   @db.VarChar(10) // HH:MM
+
+  poli_id   String @db.VarChar(20)
+  dokter_id String @db.VarChar(20)
+
+  // Antrean 
+  nomor_antrean String? @db.VarChar(20)
+  angka_antrean Int?
+
+  // Flag apakah pasien menggunakan JKN atau bukan
+  is_jkn Boolean @default(false)
+
+  // Data tambahan dalam bentuk JSON
+  
+  // Status validasi terhadap HFIS BPJS
+  status         VisitEventStatus @default(DRAFT)
+  blocked_reason String?          @db.VarChar(255) // Alasan jika BLOCKED_BPJS
+  payload   Json?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime? @updatedAt
 
   @@unique([visit_id, event_type])
   @@index([event_time])
+  @@index([tanggal, poli_id, dokter_id])
 }
 
 model BpjsAntreanQueue {
@@ -63,11 +83,42 @@ model BpjsAntreanLogs {
   @@index([queue_id])
 }
 
+model DoctorScheduleQuota {
+  id BigInt @id @default(autoincrement())
+
+  dokter_id String @db.VarChar(20)
+  poli_id   String @db.VarChar(20)
+
+  tanggal DateTime // YYYY-MM-DD 00:00:00
+
+  jam_mulai   String @db.VarChar(10) // HH:MM
+  jam_selesai String @db.VarChar(10) // HH:MM
+
+  kuota_jkn Int
+
+  source    String // "BPJS HFIS"
+  fetchedAt DateTime // Waktu data diambil dari sistem sumber
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime? @updatedAt
+
+  @@unique([poli_id, dokter_id, tanggal, jam_mulai])
+  @@index([tanggal, poli_id, dokter_id])
+}
+
 enum VisitEventType {
   REGISTER
   CHECKIN
   START
   FINISH
+}
+
+enum VisitEventStatus {
+  DRAFT        // Data belum lengkap
+  READY_BPJS   // Valid secara HFIS
+  BLOCKED_BPJS // Invalid (kode dokter/poli tidak cocok)
+  SENT_BPJS    // Sudah dikirim ke BPJS
+  FAILED_BPJS  // Ditolak BPJS
 }
 
 enum Status {

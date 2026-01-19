@@ -12,6 +12,7 @@ export async function pollTaskId3Event() {
 
   for (const row of rows) {
     const event_time = new Date(row.event_time);
+    const tanggal = new Date(event_time.toISOString().slice(0, 10));
     console.log(state.last_event_time);
     console.log("Memproses event start untuk:", event_time);
 
@@ -23,6 +24,10 @@ export async function pollTaskId3Event() {
           visit_id: row.no_rawat,
           event_type: "CHECKIN",
           event_time: event_time,
+          tanggal,
+          jam_registrasi: "00:00",
+          poli_id: "",
+          dokter_id: "",
           is_jkn: true,
         },
       });

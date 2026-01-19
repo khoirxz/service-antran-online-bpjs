@@ -1,6 +1,9 @@
 import "dotenv/config";
 import express, { Application, Request, Response } from "express";
 import prisma from "./lib/prisma";
+import healthRoutes from "./api/health.routes";
+import quotaRoutes from "./api/quota.routes";
+import auditRoutes from "./api/audit.routes";
 
 const app: Application = express();
 const PORT = process.env.PORT || 3000;
@@ -9,15 +12,15 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Health check endpoint
-app.get("/health", (req: Request, res: Response) => {
-  res.json({ status: "OK", timestamp: new Date().toISOString() });
-});
-
 // Root endpoint
 app.get("/", (req: Request, res: Response) => {
   res.json({ message: "Welcome to Antrol Service API!!" });
 });
+
+// Routes
+app.use("/health", healthRoutes);
+app.use("/admin", quotaRoutes);
+app.use("/admin", auditRoutes);
 
 // Graceful shutdown
 process.on("SIGINT", async () => {

@@ -5,9 +5,15 @@
  *
  * File ini khusus menangani polling untuk event pendaftaran pasien (REGISTER).
  */
+import { Prisma } from "@prisma/client";
 import { fetchRegisterEvents } from "../khanza/khanza.query";
 import prisma from "../lib/prisma";
 import { getPollingState, updatePollingState } from "../storage/polling.state";
+import {
+  calculateQuota,
+  calculateEstimatedTime,
+} from "../domain/quota.aggregator";
+import { validateRegistration } from "../domain/hfis.validator";
 
 export async function pollRegisterEvents() {
   const state = await getPollingState("REGISTER");
@@ -31,58 +37,95 @@ export async function pollRegisterEvents() {
       .replace(/-/g, "-")
       .replace("T", " ")
       .slice(0, 10);
+
     const event_time = new Date(`${tgl_registrasi} ${row.jam_registrasi}`);
-    console.log("Memproses event register untuk:", event_time);
+    const tanggal = new Date(`${tgl_registrasi} 00:00:00`);
+
+    console.log("Memproses event register untuk:", event_time, row.no_rawat);
 
     // skip jika terdapat anomali
     if (event_time <= state?.last_event_time!) continue;
 
     try {
-      // Format jam dari HH:MM:SS menjadi HH:MM
-      const jamMulaiFormatted = row.jam_mulai.slice(0, 5);
-      const jamSelesaiFormatted = row.jam_selesai.slice(0, 5);
+      // 1. Validasi data terhadap HFIS
+      const validation = await validateRegistration(
+        row.kd_poli,
+        row.kd_dokter,
+        tgl_registrasi,
+        row.no_reg,
+        row.no_rawat,
+      );
 
-      // Parse jam dari row.jam_registrasi (format HH:MM:SS)
-      const [hours, minutes, seconds] = row.jam_registrasi
-        .split(":")
-        .map(Number);
-      const estimasiTime = new Date(tgl_registrasi);
-      estimasiTime.setHours(hours, minutes + 6, seconds);
-      const estimasiUnix = estimasiTime.getTime();
+      // 2. Jika valid, hitung kuota dan estimasi
+      let quotaInfo = null;
+      let estimasiUnix = 0;
+
+      if (validation.isValid) {
+        quotaInfo = await calculateQuota(
+          row.kd_poli,
+          row.kd_dokter,
+          tgl_registrasi,
+        );
+
+        // Hitung estimasi waktu dilayani
+        const angkaAntrean = parseInt(row.no_reg, 10);
+        const jamMulai = row.jam_mulai.slice(0, 5);
+        estimasiUnix = calculateEstimatedTime(
+          tgl_registrasi,
+          jamMulai,
+          angkaAntrean,
+        );
+      }
+
+      // 3. Build payload (hanya jika valid)
+      const payload = quotaInfo
+        ? {
+            kuota_jkn: quotaInfo.kuota_jkn,
+            sisa_kuota_jkn: quotaInfo.sisa_kuota_jkn,
+            kuota_nonjkn: quotaInfo.kuota_nonjkn,
+            sisa_kuota_nonjkn: quotaInfo.sisa_kuota_nonjkn,
+            estimasi_dilayani: estimasiUnix,
+            jam_praktek: quotaInfo.jam_praktek,
+          }
+        : Prisma.JsonNull;
+
+      // 4. Create event dengan status berdasarkan validasi
+      const angkaAntrean = parseInt(row.no_reg, 10);
 
       await prisma.visitEvent.create({
         data: {
           visit_id: row.no_rawat,
           event_type: "REGISTER",
           event_time: event_time,
+
+          tanggal: tanggal,
+          jam_registrasi: row.jam_registrasi,
+
+          poli_id: row.kd_poli,
+          dokter_id: row.kd_dokter,
+
+          nomor_antrean: row.no_reg,
+          angka_antrean: angkaAntrean,
+
           is_jkn: true,
-          // payload: {
-          //   kodebooking: row.no_rawat,
-          //   jenispasien: "NON JKN",
-          //   nomorkartu: "",
-          //   nik: "",
-          //   nohp: "",
-          //   kodepoli: row.kd_poli,
-          //   namapoli: row.nama_poli,
-          //   pasienbaru: row.pasien_baru,
-          //   norm: row.no_rkm_medis,
-          //   tanggalperiksa: tgl_registrasi,
-          //   kodedokter: row.kd_dokter,
-          //   namadokter: row.nama_dokter,
-          //   jampraktek: `${jamMulaiFormatted}-${jamSelesaiFormatted}`,
-          //   jeniskunjungan: row.jenis_kunjungan,
-          //   nomorreferensi: "",
-          //   nomorantrean: row.no_reg,
-          //   angkaantrean: parseInt(row.no_reg, 10),
-          //   estimasidilayani: estimasiUnix,
-          //   sisakuotajkn: row.kuota_jkn - parseInt(row.no_reg, 10),
-          //   kuotajkn: row.kuota_jkn,
-          //   sisakuotanonjkn: row.kuota_jkn - parseInt(row.no_reg, 10),
-          //   kuotanonjkn: row.kuota_jkn,
-          //   keterangan: "",
-          // },
+
+          // Set status berdasarkan hasil validasi
+          status: validation.status,
+          blocked_reason: validation.blockedReason,
+
+          payload: payload as Prisma.NullableJsonNullValueInput,
         },
       });
+
+      if (validation.isValid) {
+        console.log(
+          `✅ Event register ${row.no_rawat} READY_BPJS - kuota: JKN=${quotaInfo?.sisa_kuota_jkn}/${quotaInfo?.kuota_jkn}`,
+        );
+      } else {
+        console.warn(
+          `⚠️  Event register ${row.no_rawat} ${validation.status} - ${validation.blockedReason}`,
+        );
+      }
     } catch (error: any) {
       if (error.code !== "P2002") {
         console.error("Gagal menyimpan event register:", error);
