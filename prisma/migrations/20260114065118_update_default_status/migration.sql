@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE `BpjsAntreanQueue` MODIFY `status` ENUM('PENDING', 'SEND', 'FAILED') NOT NULL DEFAULT 'PENDING';

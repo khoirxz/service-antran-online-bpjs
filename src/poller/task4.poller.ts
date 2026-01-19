@@ -21,7 +21,7 @@ export async function pollTaskId4Event() {
       await prisma.visitEvent.create({
         data: {
           visit_id: row.no_rawat,
-          event_type: "FINISH",
+          event_type: "START",
           event_time: event_time,
           is_jkn: true,
         },

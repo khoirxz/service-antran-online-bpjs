@@ -16,7 +16,7 @@ app.get("/health", (req: Request, res: Response) => {
 
 // Root endpoint
 app.get("/", (req: Request, res: Response) => {
-  res.json({ message: "Welcome to Antrol Service API" });
+  res.json({ message: "Welcome to Antrol Service API!!" });
 });
 
 // Graceful shutdown

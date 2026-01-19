@@ -6,9 +6,9 @@ export function mapEventToTaskId(eventType: EventType): number {
       return 1;
     case "CHECKIN":
       return 2;
-    case "START_SERVICE":
+    case "START":
       return 3;
-    case "FINISH_SERVICE":
+    case "FINISH":
       return 4;
     default:
       throw new Error(`Unknown event type: ${eventType}`);
