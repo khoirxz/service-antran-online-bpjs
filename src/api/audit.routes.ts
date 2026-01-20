@@ -6,19 +6,10 @@ import express, { Router } from "express";
 import type { Router as ExpressRouter } from "express";
 import prisma from "../lib/prisma";
 import { validateRegistration } from "../domain/hfis.validator";
+import { retryFailedJob } from "../queue/queue.worker";
+import { serializeBigInt } from "../utils/bigInt";
 
 const router: ExpressRouter = express.Router();
-
-/**
- * Helper untuk serialize BigInt ke string
- */
-function serializeBigInt(obj: any): any {
-  return JSON.parse(
-    JSON.stringify(obj, (_key, value) =>
-      typeof value === "bigint" ? value.toString() : value,
-    ),
-  );
-}
 
 /**
  * GET /admin/events/blocked
@@ -197,6 +188,237 @@ router.get("/events/stats", async (req, res) => {
     );
 
     res.json(formatted);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /admin/queue/pending
+ * Lihat job yang masih PENDING di queue
+ */
+router.get("/queue/pending", async (req, res) => {
+  try {
+    const { limit = "20", offset = "0" } = req.query;
+
+    const jobs = await prisma.bpjsAntreanQueue.findMany({
+      where: { status: "PENDING" },
+      orderBy: { createdAt: "asc" },
+      skip: parseInt(offset as string),
+      take: parseInt(limit as string),
+      select: {
+        id: true,
+        visit_id: true,
+        task_id: true,
+        retry_count: true,
+        last_error: true,
+        event_time: true,
+        createdAt: true,
+      },
+    });
+
+    const total = await prisma.bpjsAntreanQueue.count({
+      where: { status: "PENDING" },
+    });
+
+    res.json(
+      serializeBigInt({
+        total,
+        data: jobs,
+        pagination: {
+          limit: parseInt(limit as string),
+          offset: parseInt(offset as string),
+        },
+      }),
+    );
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /admin/queue/sent
+ * Lihat job yang sudah berhasil dikirim (SEND)
+ */
+router.get("/queue/sent", async (req, res) => {
+  try {
+    const { limit = "50", offset = "0" } = req.query;
+
+    const jobs = await prisma.bpjsAntreanQueue.findMany({
+      where: { status: "SEND" },
+      orderBy: { sentAt: "desc" },
+      skip: parseInt(offset as string),
+      take: parseInt(limit as string),
+      select: {
+        id: true,
+        visit_id: true,
+        task_id: true,
+        event_time: true,
+        sentAt: true,
+        createdAt: true,
+      },
+    });
+
+    const total = await prisma.bpjsAntreanQueue.count({
+      where: { status: "SEND" },
+    });
+
+    res.json(
+      serializeBigInt({
+        total,
+        data: jobs,
+        pagination: {
+          limit: parseInt(limit as string),
+          offset: parseInt(offset as string),
+        },
+      }),
+    );
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /admin/queue/failed
+ * Lihat job yang gagal setelah max retry (FAILED)
+ */
+router.get("/queue/failed", async (req, res) => {
+  try {
+    const { limit = "20", offset = "0" } = req.query;
+
+    const jobs = await prisma.bpjsAntreanQueue.findMany({
+      where: { status: "FAILED" },
+      orderBy: { updatedAt: "desc" },
+      skip: parseInt(offset as string),
+      take: parseInt(limit as string),
+      select: {
+        id: true,
+        visit_id: true,
+        task_id: true,
+        retry_count: true,
+        last_error: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    const total = await prisma.bpjsAntreanQueue.count({
+      where: { status: "FAILED" },
+    });
+
+    res.json(
+      serializeBigInt({
+        total,
+        data: jobs,
+        pagination: {
+          limit: parseInt(limit as string),
+          offset: parseInt(offset as string),
+        },
+      }),
+    );
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /admin/queue/:id/retry
+ * Retry failed job
+ */
+router.post("/queue/:id/retry", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const job = await prisma.bpjsAntreanQueue.findUnique({
+      where: { id: BigInt(id) },
+    });
+
+    if (!job) {
+      return res.status(404).json({ error: "Queue job tidak ditemukan" });
+    }
+
+    if (job.status !== "FAILED") {
+      return res.status(400).json({
+        error: `Job status bukan FAILED (current: ${job.status})`,
+      });
+    }
+
+    // Retry
+    await retryFailedJob(BigInt(id));
+
+    res.json({
+      message: `Job ${id} di-retry`,
+      visit_id: job.visit_id,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /admin/queue/logs?queue_id=123
+ * Lihat logs dari queue job
+ */
+router.get("/queue/logs", async (req, res) => {
+  try {
+    const { queue_id, limit = "20", offset = "0" } = req.query;
+
+    if (!queue_id) {
+      return res.status(400).json({ error: "Parameter queue_id wajib diisi" });
+    }
+
+    const logs = await prisma.bpjsAntreanLogs.findMany({
+      where: { queue_id: BigInt(queue_id as string) },
+      orderBy: { createdAt: "desc" },
+      skip: parseInt(offset as string),
+      take: parseInt(limit as string),
+    });
+
+    res.json(
+      serializeBigInt({
+        queue_id,
+        total: logs.length,
+        data: logs,
+      }),
+    );
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /admin/queue/stats
+ * Statistik queue status
+ */
+router.get("/queue/stats", async (req, res) => {
+  try {
+    const stats = await prisma.bpjsAntreanQueue.groupBy({
+      by: ["status"],
+      _count: {
+        id: true,
+      },
+    });
+
+    const formatted = stats.reduce(
+      (acc, stat) => {
+        acc[stat.status] = stat._count.id;
+        return acc;
+      },
+      {} as Record<string, number>,
+    );
+
+    // Hitung average retry count untuk failed jobs
+    const failedJobs = await prisma.bpjsAntreanQueue.aggregate({
+      where: { status: "FAILED" },
+      _avg: {
+        retry_count: true,
+      },
+    });
+
+    res.json({
+      ...formatted,
+      failed_avg_retry: failedJobs._avg.retry_count || 0,
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

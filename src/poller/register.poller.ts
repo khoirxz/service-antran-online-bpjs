@@ -92,6 +92,8 @@ export async function pollRegisterEvents() {
             sisa_kuota_nonjkn: quotaInfo.sisa_kuota_nonjkn,
             estimasi_dilayani: estimasiUnix,
             jam_praktek: quotaInfo.jam_praktek,
+            no_rm: row.no_rkm_medis,
+            jeniskunjungan: row.jenis_kunjungan,
           }
         : Prisma.JsonNull;
 

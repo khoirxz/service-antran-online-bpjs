@@ -3,6 +3,7 @@ import { startPollers } from "./scheduler/poller.scheduler"; // mengambil data r
 import { startWorker } from "./scheduler/worker.scheduler";
 import { startQueueBuilder } from "./scheduler/queue.scheduler";
 import { startQuotaScheduler } from "./scheduler/quota.scheduler";
+import { startPoliScheduler } from "./scheduler/poli.scheduler";
 import * as server from "./server";
 
 // Start server
@@ -11,9 +12,14 @@ server.app;
 // Start quota scheduler (refresh jadwal BPJS setiap pagi)
 startQuotaScheduler();
 
+// Start poli scheduler (sinkronisasi poli setiap Senin pukul 06:00)
+startPoliScheduler();
+
 // Start pollers (monitoring Khanza DB)
 startPollers();
-startWorker();
 
-// TODO: Aktifkan setelah testing
-// startQueueBuilder();
+// Start queue builder (build queue dari READY_BPJS events setiap 1 menit)
+startQueueBuilder();
+
+// Start queue worker (process queue jobs setiap 5 detik)
+startWorker();

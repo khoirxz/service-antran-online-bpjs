@@ -55,6 +55,44 @@ export async function getJadwalDokter(kodePoli: string, tanggal: string) {
 }
 
 /**
+ * Fetch semua informasi poli dari BPJS API
+ */
+export async function getAllPoliInfo(): Promise<
+  {
+    kodesubspesialis: string;
+    namasubspesialis: string;
+    kodepoli: string;
+    namapoli: string;
+  }[]
+> {
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const signature = generateSignature(CONST_ID, SECRET_KEY, timestamp);
+
+  const response = await axios.get(`${BPJS_BASE_URL}/ref/poli/fp`, {
+    headers: {
+      "x-cons-id": CONST_ID,
+      "x-timestamp": timestamp,
+      "x-signature": signature,
+      user_key: SECRET_KEY,
+    },
+    timeout: 10000,
+  });
+
+  // Response BPJS terenkripsi, perlu didekripsi
+  if (response.data.response) {
+    const decrypted = decryptBpjsResponse(response.data.response, timestamp);
+    return JSON.parse(decrypted);
+  }
+
+  return response.data as {
+    kodesubspesialis: string;
+    namasubspesialis: string;
+    kodepoli: string;
+    namapoli: string;
+  }[];
+}
+
+/**
  * Dekripsi response BPJS menggunakan AES-256-CBC + LZString decompression
  */
 function decryptBpjsResponse(encryptedData: string, ts: string): string {

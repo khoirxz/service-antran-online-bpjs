@@ -3,7 +3,7 @@ import { VisitEvent } from "./visit-event.model";
 export function buildRegisterPayload(event: VisitEvent) {
   return {
     kodebooking: event.visit_id,
-    jenispasien: event.patient!.bpjs_number ? "JKN" : "NONJKN",
+    jenispasien: "NON JKN",
     nomorkartu: event.patient!.bpjs_number,
     nik: event.patient!.nik,
     nohp: event.patient!.phone ?? "",

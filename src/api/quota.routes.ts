@@ -5,9 +5,12 @@
 import express, { Router } from "express";
 import type { Router as ExpressRouter } from "express";
 import { manualRefreshQuota } from "../scheduler/quota.scheduler";
+import { manualSyncPoli } from "../scheduler/poli.scheduler";
 import { calculateQuota } from "../domain/quota.aggregator";
 import prisma from "../lib/prisma";
 import { formatLocalDate } from "../utils/formatDate";
+import { syncPoliData } from "../domain/poli.aggregator";
+import { serializeBigInt } from "../utils/bigInt";
 
 const router: ExpressRouter = express.Router();
 
@@ -47,11 +50,13 @@ router.post("/quota/refresh", async (req, res) => {
       console.error("Error saat manual refresh:", error);
     });
 
-    res.json({
-      message: "Manual refresh dimulai",
-      poli,
-      tanggal,
-    });
+    res.json(
+      serializeBigInt({
+        message: "Manual refresh dimulai",
+        poli,
+        tanggal,
+      }),
+    );
   } catch (error: any) {
     res.status(500).json({
       error: error.message,
@@ -118,10 +123,12 @@ router.get("/quota/snapshots", async (req, res) => {
       take: 50,
     });
 
-    res.json({
-      total: snapshots.length,
-      data: snapshots,
-    });
+    res.json(
+      serializeBigInt({
+        total: snapshots.length,
+        data: snapshots,
+      }),
+    );
   } catch (error: any) {
     res.status(500).json({
       error: error.message,
@@ -158,6 +165,51 @@ router.get("/queue/status", async (req, res) => {
     res.json({
       stats,
       recentFailed,
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * POST /admin/poli/sync-manual
+ * Manual trigger untuk sinkronisasi data poli dari BPJS
+ */
+router.post("/poli/sync-manual", async (req, res) => {
+  try {
+    const result = await manualSyncPoli();
+
+    if (result.success) {
+      return res.status(200).json({
+        message: result.message,
+      });
+    } else {
+      return res.status(500).json({
+        error: result.message,
+      });
+    }
+  } catch (error: any) {
+    res.status(500).json({
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * GET /admin/poli/list
+ * Lihat daftar poli yang sudah disinkronisasi
+ */
+router.get("/poli/list", async (req, res) => {
+  try {
+    const polis = await prisma.poli.findMany({
+      orderBy: { poli_id: "asc" },
+    });
+
+    res.json({
+      total: polis.length,
+      data: polis,
     });
   } catch (error: any) {
     res.status(500).json({

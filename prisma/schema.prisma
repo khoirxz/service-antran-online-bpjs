@@ -41,13 +41,13 @@ model VisitEvent {
   is_jkn Boolean @default(false)
 
   // Data tambahan dalam bentuk JSON
-  
+
   // Status validasi terhadap HFIS BPJS
   status         VisitEventStatus @default(DRAFT)
   blocked_reason String?          @db.VarChar(255) // Alasan jika BLOCKED_BPJS
-  payload   Json?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime? @updatedAt
+  payload        Json?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime?        @updatedAt
 
   @@unique([visit_id, event_type])
   @@index([event_time])
@@ -106,6 +106,18 @@ model DoctorScheduleQuota {
   @@index([tanggal, poli_id, dokter_id])
 }
 
+model Poli {
+  id                BigInt    @id @default(autoincrement())
+  poli_id           String    @unique @db.VarChar(20)
+  nama              String    @db.VarChar(100)
+  kode_subspesialis String    @db.VarChar(20)
+  nama_subspesialis String    @db.VarChar(100)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime? @updatedAt
+
+  @@index([poli_id])
+}
+
 enum VisitEventType {
   REGISTER
   CHECKIN
@@ -114,11 +126,11 @@ enum VisitEventType {
 }
 
 enum VisitEventStatus {
-  DRAFT        // Data belum lengkap
-  READY_BPJS   // Valid secara HFIS
+  DRAFT // Data belum lengkap
+  READY_BPJS // Valid secara HFIS
   BLOCKED_BPJS // Invalid (kode dokter/poli tidak cocok)
-  SENT_BPJS    // Sudah dikirim ke BPJS
-  FAILED_BPJS  // Ditolak BPJS
+  SENT_BPJS // Sudah dikirim ke BPJS
+  FAILED_BPJS // Ditolak BPJS
 }
 
 enum Status {

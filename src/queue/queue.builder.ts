@@ -1,12 +1,13 @@
-import { prisma } from "../server";
-import { toDomainEvent } from "../domain/visit-event.factory";
-import { validateForBpjs } from "../domain/bpjs.validator";
+import prisma from "../lib/prisma";
 import {
   buildRegisterPayload,
   buildTaskUpdatePayload,
-} from "../domain/payload.builder";
-import { mapEventToTaskId } from "../domain/task.mapper";
+} from "../domain/queue.payload";
 
+/**
+ * Build queue dari VisitEvent yang READY_BPJS
+ * Dipanggil setiap 1 menit
+ */
 export async function buildQueue() {
   const dbEvents = await prisma.visitEvent.findMany({
     where: {
@@ -19,11 +20,13 @@ export async function buildQueue() {
     take: 100,
   });
 
-  for (const dbEvent of dbEvents) {
-    console.log(dbEvent);
-    const event = toDomainEvent(dbEvent);
-    const task_id = mapEventToTaskId(event.event_type);
+  console.log(`📦 Found ${dbEvents.length} READY_BPJS events to queue`);
 
+  for (const event of dbEvents) {
+    // Untuk REGISTER event (task_id = 1)
+    const task_id = 1; // event_type REGISTER selalu task_id 1
+
+    // Cek apakah sudah ada di queue
     const exists = await prisma.bpjsAntreanQueue.findUnique({
       where: {
         visit_id_task_id: {
@@ -33,27 +36,34 @@ export async function buildQueue() {
       },
     });
 
-    if (exists) continue;
+    if (exists) {
+      console.log(
+        `⏭️  Event ${event.visit_id} sudah ada di queue (status: ${exists.status})`,
+      );
+      continue;
+    }
 
     try {
-      validateForBpjs(event);
+      // Build payload untuk REGISTER
+      const payload = await buildRegisterPayload(event);
 
-      const payload =
-        task_id === 1
-          ? buildRegisterPayload(event)
-          : buildTaskUpdatePayload(event, task_id);
-
+      // Create queue item
       await prisma.bpjsAntreanQueue.create({
         data: {
           visit_id: event.visit_id,
           task_id,
           event_time: event.event_time,
-          payload,
+          payload: JSON.parse(JSON.stringify(payload)),
         },
       });
+
+      console.log(
+        `✅ Queued ${event.visit_id} - poli: ${event.poli_id}, antrean: ${event.nomor_antrean}`,
+      );
     } catch (error) {
-      console.warn(
-        `Skipping event ${event.id} for BPJS queue: ${(error as Error).message}`,
+      console.error(
+        `❌ Error queueing ${event.visit_id}:`,
+        (error as Error).message,
       );
     }
   }

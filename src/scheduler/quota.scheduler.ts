@@ -5,24 +5,44 @@
 
 import cron from "node-cron";
 import { refreshDoctorScheduleFromBpjs } from "../domain/quota.aggregator";
+import { syncPoliData } from "../domain/poli.aggregator";
+import prisma from "../lib/prisma";
+import { POLI as POLI_LIST } from "../const/poli";
 
-// Daftar poli yang perlu di-refresh
-// TODO: Bisa di-load dari config atau database
-const POLI_LIST = [
-  "ANA", // Anak
-  "BED", // Bedah
-  "INT", // Penyakit Dalam
-  "MAT", // Kebidanan
-  "OBG", // Kandungan
-  "ORT", // Orthopedi
-  "THT", // THT
-  "PD", // Paru
-  "JAN", // Jantung
-  "KLT", // Kulit
-  "SAR", // Saraf
-  "JIW", // Jiwa
-  "GIG", // Gigi
-];
+/**
+ * Ambil daftar poli dari database
+ * Jika database kosong, fetch dari BPJS HFIS
+ */
+async function getPoliList(): Promise<string[]> {
+  // Cek data di database
+  const polis = await prisma.poli.findMany({
+    select: { poli_id: true },
+  });
+
+  // Jika ada data, gunakan dari database
+  if (polis.length > 0) {
+    console.log(`📋 Menggunakan ${polis.length} poli dari database`);
+    return polis.map((p) => p.poli_id);
+  }
+
+  // Jika kosong, fetch dari BPJS
+  console.log("📥 Database poli kosong, fetch dari BPJS HFIS...");
+  try {
+    await syncPoliData();
+    const poliAfterSync = await prisma.poli.findMany({
+      select: { poli_id: true },
+    });
+    console.log(
+      `✅ Fetch BPJS berhasil, diperoleh ${poliAfterSync.length} poli`,
+    );
+    return poliAfterSync.map((p) => p.poli_id);
+  } catch (error) {
+    console.error("❌ Gagal fetch dari BPJS:", error);
+    // Fallback ke hardcode jika semua gagal
+    console.warn("⚠️  Menggunakan fallback hardcoded POLI_LIST");
+    return POLI_LIST;
+  }
+}
 
 export function startQuotaScheduler() {
   // Refresh setiap hari jam 05:00 WIB
@@ -31,6 +51,9 @@ export function startQuotaScheduler() {
 
     const today = new Date().toISOString().slice(0, 10);
     const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+
+    // Ambil daftar poli dari database
+    const POLI_LIST = await getPoliList();
 
     // Refresh untuk hari ini dan besok
     for (const tanggal of [today, tomorrow]) {
