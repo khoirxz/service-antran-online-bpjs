@@ -10,6 +10,17 @@ import { validateRegistration } from "../domain/hfis.validator";
 const router: ExpressRouter = express.Router();
 
 /**
+ * Helper untuk serialize BigInt ke string
+ */
+function serializeBigInt(obj: any): any {
+  return JSON.parse(
+    JSON.stringify(obj, (_key, value) =>
+      typeof value === "bigint" ? value.toString() : value,
+    ),
+  );
+}
+
+/**
  * GET /admin/events/blocked
  * Lihat semua event yang BLOCKED_BPJS
  */
@@ -43,15 +54,18 @@ router.get("/events/blocked", async (req, res) => {
       where: { status: "BLOCKED_BPJS" },
     });
 
-    res.json({
-      total,
-      data: events,
-      pagination: {
-        limit: parseInt(limit as string),
-        offset: parseInt(offset as string),
-        hasMore: total > parseInt(offset as string) + parseInt(limit as string),
-      },
-    });
+    res.json(
+      serializeBigInt({
+        total,
+        data: events,
+        pagination: {
+          limit: parseInt(limit as string),
+          offset: parseInt(offset as string),
+          hasMore:
+            total > parseInt(offset as string) + parseInt(limit as string),
+        },
+      }),
+    );
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -97,12 +111,14 @@ router.post("/events/:id/revalidate", async (req, res) => {
       },
     });
 
-    res.json({
-      message: `Event ${id} revalidated`,
-      previous_status: "BLOCKED_BPJS",
-      new_status: updated.status,
-      blocked_reason: updated.blocked_reason,
-    });
+    res.json(
+      serializeBigInt({
+        message: `Event ${id} revalidated`,
+        previous_status: "BLOCKED_BPJS",
+        new_status: updated.status,
+        blocked_reason: updated.blocked_reason,
+      }),
+    );
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

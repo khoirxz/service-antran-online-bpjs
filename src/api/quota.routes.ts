@@ -7,6 +7,7 @@ import type { Router as ExpressRouter } from "express";
 import { manualRefreshQuota } from "../scheduler/quota.scheduler";
 import { calculateQuota } from "../domain/quota.aggregator";
 import prisma from "../lib/prisma";
+import { formatLocalDate } from "../utils/formatDate";
 
 const router: ExpressRouter = express.Router();
 
@@ -36,8 +37,13 @@ router.post("/quota/refresh", async (req, res) => {
       });
     }
 
+    // format tanggal
+    const formattedTanggal = tanggal.map((t: string) =>
+      formatLocalDate(new Date(t)),
+    );
+
     // Jalankan refresh di background
-    manualRefreshQuota(poli, tanggal).catch((error) => {
+    manualRefreshQuota(poli, formattedTanggal).catch((error) => {
       console.error("Error saat manual refresh:", error);
     });
 

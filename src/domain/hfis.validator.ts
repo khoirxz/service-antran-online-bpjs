@@ -4,6 +4,7 @@
  */
 
 import prisma from "../lib/prisma";
+import { formatLocalDate } from "../utils/formatDate";
 
 export interface ValidationResult {
   isValid: boolean;
@@ -19,12 +20,14 @@ export async function validateHfisData(
   dokterId: string,
   tanggal: string,
 ): Promise<ValidationResult> {
+  // format tanggal
+  const formattedDate = formatLocalDate(new Date(tanggal));
   // Cek apakah ada jadwal untuk poli dan dokter ini di tanggal tersebut
   const schedule = await prisma.doctorScheduleQuota.findFirst({
     where: {
       poli_id: poliId,
       dokter_id: dokterId,
-      tanggal: new Date(tanggal),
+      tanggal: new Date(formattedDate),
     },
   });
 
@@ -59,8 +62,11 @@ export async function validateRegistration(
   noReg?: string,
   noRawat?: string,
 ): Promise<RegistrationValidation> {
+  // format tanggal
+  const formattedDate = formatLocalDate(new Date(tanggal));
+
   // Validasi field wajib
-  if (!poliId || !dokterId || !tanggal || !noReg || !noRawat) {
+  if (!poliId || !dokterId || !formattedDate || !noReg || !noRawat) {
     return {
       isValid: false,
       status: "DRAFT",
@@ -70,7 +76,11 @@ export async function validateRegistration(
   }
 
   // Validasi terhadap HFIS
-  const hfisValidation = await validateHfisData(poliId, dokterId, tanggal);
+  const hfisValidation = await validateHfisData(
+    poliId,
+    dokterId,
+    formattedDate,
+  );
 
   if (!hfisValidation.isValid) {
     return {

@@ -14,6 +14,11 @@ import {
   calculateEstimatedTime,
 } from "../domain/quota.aggregator";
 import { validateRegistration } from "../domain/hfis.validator";
+import {
+  formatLocalDate,
+  createUtcDateFromLocalDateString,
+  createUtcDateTimeFromLocal,
+} from "../utils/formatDate";
 
 export async function pollRegisterEvents() {
   const state = await getPollingState("REGISTER");
@@ -30,16 +35,17 @@ export async function pollRegisterEvents() {
   let maxEventTime = state?.last_event_time;
 
   for (const row of rows) {
-    // format tgl_registrasi menjadi YYYY-MM-DD
-    const tgl_registrasi = new Date(row.tgl_registrasi)
-      .toISOString()
-      .slice(0, 10)
-      .replace(/-/g, "-")
-      .replace("T", " ")
-      .slice(0, 10);
+    // Format tanggal lokal tanpa konversi timezone
+    const tgl_registrasi = formatLocalDate(new Date(row.tgl_registrasi));
 
-    const event_time = new Date(`${tgl_registrasi} ${row.jam_registrasi}`);
-    const tanggal = new Date(`${tgl_registrasi} 00:00:00`);
+    // Simpan event_time sebagai UTC dengan jam-menit lokal agar tidak bergeser
+    const event_time = createUtcDateTimeFromLocal(
+      tgl_registrasi,
+      row.jam_registrasi,
+    );
+
+    // Simpan tanggal sebagai UTC midnight agar tidak bergeser mundur saat insert
+    const tanggal = createUtcDateFromLocalDateString(tgl_registrasi);
 
     console.log("Memproses event register untuk:", event_time, row.no_rawat);
 

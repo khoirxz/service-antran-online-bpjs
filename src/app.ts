@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { startPollers } from "./scheduler/poller.scheduler";
+import { startPollers } from "./scheduler/poller.scheduler"; // mengambil data registrasi dari Khanza
 import { startWorker } from "./scheduler/worker.scheduler";
 import { startQueueBuilder } from "./scheduler/queue.scheduler";
 import { startQuotaScheduler } from "./scheduler/quota.scheduler";
@@ -13,7 +13,7 @@ startQuotaScheduler();
 
 // Start pollers (monitoring Khanza DB)
 startPollers();
+startWorker();
 
 // TODO: Aktifkan setelah testing
 // startQueueBuilder();
-// startWorker();
