@@ -83,18 +83,23 @@ export async function fetchRegisterEvents(lastDate: string, lastTime: string) {
   }[];
 }
 
-export async function fetchTaskId(taskId: 3 | 4 | 5, lastEventTime: string) {
-  const [rows] = await khanzaDb.query(
-    `SELECT no_rawat, task_id_${taskId.toString()} as event_time FROM reg_periksa
-        WHERE task_id_${taskId.toString()} IS NOT NULL AND task_id_${taskId.toString()} > ?
-        ORDER BY task_id_${taskId.toString()} LIMIT 100`,
-    [lastEventTime],
-  );
+export async function fetchTaskId(
+  taskId: 3 | 4 | 5,
+  lastEventTime: string,
+): Promise<{ no_rawat: string; event_time: string }[]> {
+  const query = `
+    SELECT no_rawat, task_id_${taskId.toString()} as event_time
+    FROM reg_periksa
+    WHERE task_id_${taskId.toString()} IS NOT NULL AND task_id_${taskId.toString()} > ?
+    ORDER BY task_id_${taskId.toString()} LIMIT 100
+  `;
 
-  return rows as {
-    no_rawat: string;
-    event_time: string;
-  }[];
+  const [rows] = await khanzaDb.query(query, [lastEventTime]);
+
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    no_rawat: (row as any).no_rawat,
+    event_time: (row as any).event_time,
+  }));
 }
 
 export async function aggregateRegisterEventsByPoliDokterTanggal(

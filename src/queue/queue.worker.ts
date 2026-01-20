@@ -5,6 +5,7 @@
 
 import prisma from "../lib/prisma";
 import { sendToBpjs } from "../bpjs/bpjs.client";
+import { updateTaskProgress } from "../domain/task.progress";
 
 const MAX_RETRY = 5;
 const RETRY_DELAY_MS = 5000; // 5 detik antar retry
@@ -58,13 +59,32 @@ export async function processQueueJob() {
         },
       });
 
-      // Update VisitEvent status menjadi SENT_BPJS
-      await prisma.visitEvent.updateMany({
+      // Update VisitEvent
+      const visitEvent = await prisma.visitEvent.findUnique({
         where: { visit_id: job.visit_id },
-        data: {
-          status: "SENT_BPJS",
-        },
       });
+
+      if (visitEvent) {
+        // Untuk REGISTER: ubah status event menjadi SENT_BPJS
+        if (job.task_id === 1) {
+          await prisma.visitEvent.update({
+            where: { visit_id: job.visit_id },
+            data: { status: "SENT_BPJS" },
+          });
+        } else {
+          // Untuk UPDATE (3/4/5): update task_progress
+          const newProgress = updateTaskProgress(
+            visitEvent.task_progress,
+            job.task_id,
+            "SENT_BPJS",
+          );
+
+          await prisma.visitEvent.update({
+            where: { visit_id: job.visit_id },
+            data: { task_progress: newProgress as any },
+          });
+        }
+      }
 
       console.log(
         `✅ Success: ${job.visit_id} sent to BPJS (code: ${responseCode})`,
@@ -95,14 +115,36 @@ export async function processQueueJob() {
         },
       });
 
-      // Update VisitEvent status menjadi FAILED_BPJS
-      await prisma.visitEvent.updateMany({
+      // Update VisitEvent
+      const visitEvent = await prisma.visitEvent.findUnique({
         where: { visit_id: job.visit_id },
-        data: {
-          status: "FAILED_BPJS",
-          blocked_reason: `BPJS submission failed after ${MAX_RETRY} attempts: ${errorMsg}`,
-        },
       });
+
+      if (visitEvent) {
+        if (job.task_id === 1) {
+          // REGISTER failed
+          await prisma.visitEvent.update({
+            where: { visit_id: job.visit_id },
+            data: {
+              status: "FAILED_BPJS",
+              blocked_reason: `BPJS submission failed after ${MAX_RETRY} attempts: ${errorMsg}`,
+            },
+          });
+        } else {
+          // UPDATE (3/4/5) failed
+          const newProgress = updateTaskProgress(
+            visitEvent.task_progress,
+            job.task_id,
+            "FAILED_BPJS",
+            errorMsg,
+          );
+
+          await prisma.visitEvent.update({
+            where: { visit_id: job.visit_id },
+            data: { task_progress: newProgress as any },
+          });
+        }
+      }
 
       console.error(
         `❌ Job ${job.visit_id} marked as FAILED after ${MAX_RETRY} retries`,

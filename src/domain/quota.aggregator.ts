@@ -62,6 +62,8 @@ export async function refreshDoctorScheduleFromBpjs(
           },
         },
         create: {
+          nama_dokter: jadwal.namadokter,
+          nama_poli: jadwal.namapoli,
           dokter_id: jadwal.kodedokter.toString(),
           poli_id: jadwal.kodepoli,
           tanggal: new Date(tanggal),

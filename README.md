@@ -3,48 +3,62 @@
 ANTREAN ONLINE (BPJS SERVICE)
 Service ini dibuat untuk memudahkan pengiriman antrean online ke BPJS. Terutama yang masih mendapatkan kendala pada pengiriman antrean melalui SIMRS Khanza.
 
+## 📚 Documentation
+
+**Start here:**
+
+- **[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)** - Directory layout & architecture overview
+- **[src/domain/README.md](src/domain/README.md)** - Business logic & domain functions
+
+**Implementation Guides:**
+
+- **[IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)** - Refactored VisitEvent structure
+- **[DATA_FLOW.md](DATA_FLOW.md)** - Visual data flow diagrams
+- **[REFACTOR_SUMMARY.md](REFACTOR_SUMMARY.md)** - Technical refactoring details
+- **[Quick_Reference.md](Quick_Reference.md)** - Code snippets & quick lookup
+
+## Project Overview
+
 ```
-bpjs-antrean-service/
-├─ src/
-│  ├─ config/
-│  │  ├─ bpjs.config.ts
-│  │  ├─ db.config.ts
-│  │  └─ app.config.ts
-│  │
-│  ├─ khanza/
-│  │  ├─ khanza.client.ts        # koneksi read-only ke DB Khanza
-│  │  └─ khanza.poller.ts        # polling engine
-│  │
-│  ├─ domain/
-│  │  ├─ event.model.ts          # event internal (REGISTER, CHECKIN, dll)
-│  │  ├─ task.mapper.ts          # event → taskId
-│  │  └─ payload.builder.ts      # build payload BPJS
-│  │
-│  ├─ queue/
-│  │  ├─ queue.model.ts
-│  │  ├─ queue.repository.ts
-│  │  └─ queue.worker.ts         # sender ke BPJS
-│  │
-│  ├─ bpjs/
-│  │  ├─ bpjs.client.ts          # HTTP client BPJS
-│  │  └─ bpjs.signature.ts       # header & signature
-│  │
-│  ├─ storage/
-│  │  ├─ event.repository.ts
-│  │  └─ polling.state.ts
-│  │
-│  ├─ api/
-│  │  ├─ admin.routes.ts         # retry / replay
-│  │  └─ health.routes.ts
-│  │
-│  ├─ app.ts
-│  └─ server.ts
+ANTREAN SERVICE
+├─ Pollers (Khanza → Database)
+│   ├─ REGISTER events
+│   ├─ CHECKIN/START/FINISH events
+│   └─ Watermark-based incremental sync
+│
+├─ Domain Layer (Business Logic)
+│   ├─ Validation (HFIS snapshot check)
+│   ├─ Quota calculation
+│   └─ Payload building
+│
+├─ Queue System (Async Processing)
+│   ├─ Queue builder (enqueue jobs)
+│   └─ Queue worker (send to BPJS)
+│
+└─ Admin APIs (Monitoring)
+    ├─ Queue status
+    ├─ Blocked events
+    └─ Quota info
+```
+
+│ │
+│ ├─ storage/
+│ │ ├─ event.repository.ts
+│ │ └─ polling.state.ts
+│ │
+│ ├─ api/
+│ │ ├─ admin.routes.ts # retry / replay
+│ │ └─ health.routes.ts
+│ │
+│ ├─ app.ts
+│ └─ server.ts
 │
 ├─ migrations/
 ├─ .env
 ├─ package.json
 └─ README.md
-```
+
+````
 
 ### Tambah Antrean
 
@@ -108,7 +122,7 @@ bpjs-antrean-service/
   "kuotanonjkn": 30,
   "keterangan": "Peserta harap 30 menit lebih awal guna pencatatan administrasi."
 }
-```
+````
 
 ### Update Antrean
 

@@ -21,10 +21,9 @@ model PollingState {
 }
 
 model VisitEvent {
-  id         BigInt         @id @default(autoincrement())
-  visit_id   String         @db.VarChar(50) // no rawat
-  event_type VisitEventType // not null
-  event_time DateTime // Waktu event terjadi di sistem sumber
+  id         BigInt   @id @default(autoincrement())
+  visit_id   String   @unique @db.VarChar(50) // no rawat
+  event_time DateTime // Waktu REGISTER terjadi di sistem sumber
 
   // Dimensi Agregasi
   tanggal        DateTime // start of day
@@ -40,16 +39,18 @@ model VisitEvent {
   // Flag apakah pasien menggunakan JKN atau bukan
   is_jkn Boolean @default(false)
 
-  // Data tambahan dalam bentuk JSON
-
-  // Status validasi terhadap HFIS BPJS
+  // Status validasi terhadap HFIS BPJS untuk REGISTER
   status         VisitEventStatus @default(DRAFT)
   blocked_reason String?          @db.VarChar(255) // Alasan jika BLOCKED_BPJS
   payload        Json?
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime?        @updatedAt
 
-  @@unique([visit_id, event_type])
+  // Track progress of tasks (CHECKIN=3, START=4, FINISH=5)
+  // { "1": { status: "SENT_BPJS", sentAt: "..." }, "3": { status: "SENT_BPJS", sentAt: "..." }, ... }
+  task_progress Json?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime? @updatedAt
+
   @@index([event_time])
   @@index([tanggal, poli_id, dokter_id])
 }
@@ -86,8 +87,10 @@ model BpjsAntreanLogs {
 model DoctorScheduleQuota {
   id BigInt @id @default(autoincrement())
 
-  dokter_id String @db.VarChar(20)
-  poli_id   String @db.VarChar(20)
+  dokter_id   String @db.VarChar(20)
+  poli_id     String @db.VarChar(20)
+  nama_dokter String @db.VarChar(100)
+  nama_poli   String @db.VarChar(100)
 
   tanggal DateTime // YYYY-MM-DD 00:00:00
 
@@ -116,13 +119,6 @@ model Poli {
   updatedAt         DateTime? @updatedAt
 
   @@index([poli_id])
-}
-
-enum VisitEventType {
-  REGISTER
-  CHECKIN
-  START
-  FINISH
 }
 
 enum VisitEventStatus {

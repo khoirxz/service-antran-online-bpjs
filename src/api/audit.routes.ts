@@ -31,7 +31,6 @@ router.get("/events/blocked", async (req, res) => {
       select: {
         id: true,
         visit_id: true,
-        event_type: true,
         event_time: true,
         poli_id: true,
         dokter_id: true,

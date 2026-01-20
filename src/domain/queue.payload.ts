@@ -72,10 +72,12 @@ export async function buildRegisterPayload(
     pasienbaru: 0, // TODO: ambil dari Khanza
     norm: payloadData?.norm ?? "-", // TODO: ambil dari Khanza
     tanggalperiksa: event.tanggal.toISOString().slice(0, 10),
-    kodedokter: event.dokter_id,
-    namadokter: payloadData?.dokter ?? "-",
-    jampraktek: payloadData?.jam_praktek ?? "", // Dari payload yang sudah di-hitung
-    jeniskunjungan: payloadData?.jeniskunjungan ?? 3, // Default: kunjungan biasa
+    kodedokter: snapshot ? snapshot.dokter_id : event.dokter_id,
+    namadokter: snapshot ? snapshot.nama_dokter : "-",
+    jampraktek: snapshot
+      ? `${snapshot.jam_mulai ?? ""}-${snapshot.jam_selesai ?? ""}`
+      : "", // Dari HFIS snapshot
+    jeniskunjungan: payloadData?.jeniskunjungan ?? 3, // Dari payload
     nomorreferensi: "",
     nomorantrean: event.nomor_antrean ?? "",
     angkaantrean: event.angka_antrean ?? 0,
@@ -93,15 +95,15 @@ export async function buildRegisterPayload(
  */
 export async function buildTaskUpdatePayload(
   event: VisitEvent,
-  task_id: number,
+  taskid: number,
 ): Promise<{
   kodebooking: string;
-  task_id: number;
+  taskid: number;
   waktu: number;
 }> {
   return {
     kodebooking: event.visit_id,
-    task_id,
+    taskid,
     waktu: event.event_time.getTime(),
   };
 }

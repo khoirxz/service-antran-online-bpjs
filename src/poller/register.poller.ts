@@ -103,7 +103,6 @@ export async function pollRegisterEvents() {
       await prisma.visitEvent.create({
         data: {
           visit_id: row.no_rawat,
-          event_type: "REGISTER",
           event_time: event_time,
 
           tanggal: tanggal,

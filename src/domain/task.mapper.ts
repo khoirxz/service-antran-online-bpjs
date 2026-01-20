@@ -1,15 +1,17 @@
-import { EventType } from "./visit-event.model";
+// Task ID mapping for BPJS API
+// REGISTER (1), CHECKIN (3), START (4), FINISH (5)
+export type EventType = "REGISTER" | "CHECKIN" | "START" | "FINISH";
 
 export function mapEventToTaskId(eventType: EventType): number {
   switch (eventType) {
     case "REGISTER":
       return 1;
     case "CHECKIN":
-      return 2;
-    case "START":
       return 3;
-    case "FINISH":
+    case "START":
       return 4;
+    case "FINISH":
+      return 5;
     default:
       throw new Error(`Unknown event type: ${eventType}`);
   }
