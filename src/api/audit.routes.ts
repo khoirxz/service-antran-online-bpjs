@@ -9,6 +9,7 @@ import { validateRegistration } from "../domain/hfis.validator";
 import { updateTaskProgress, getTaskProgress } from "../domain/task.progress";
 import { retryFailedJob } from "../queue/queue.worker";
 import { serializeBigInt } from "../utils/bigInt";
+import { formatLocalDate } from "../utils/formatDate";
 
 const router: ExpressRouter = express.Router();
 
@@ -112,10 +113,11 @@ router.post("/events/:id/revalidate", async (req, res) => {
     }
 
     // Revalidasi
+    const tanggal = formatLocalDate(event.tanggal);
     const validation = await validateRegistration(
       event.poli_id,
       event.dokter_id,
-      event.tanggal.toISOString().slice(0, 10),
+      tanggal,
       event.nomor_antrean || "",
       event.visit_id,
     );
@@ -170,10 +172,11 @@ router.post("/events/revalidate-all", async (req, res) => {
     let stillBlocked = 0;
 
     for (const event of blockedEvents) {
+      const tanggal = formatLocalDate(event.tanggal);
       const validation = await validateRegistration(
         event.poli_id,
         event.dokter_id,
-        event.tanggal.toISOString().slice(0, 10),
+        tanggal,
         event.nomor_antrean || "",
         event.visit_id,
       );
