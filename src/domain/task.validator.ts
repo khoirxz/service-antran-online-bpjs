@@ -2,14 +2,70 @@ import prisma from "../lib/prisma";
 
 /**
  * Task validation error reasons
+ * Format: <dependent_task>_<predecessor_task>_<issue_type>
  */
 export type TaskValidationReason =
-  | "task_3_not_sent" // CHECKIN belum terkirim tapi sudah FINISH/CLOSE
-  | "task_4_not_sent" // START belum terkirim tapi sudah FINISH/CLOSE
-  | "task_3_missing" // Tidak ada record CHECKIN sama sekali
-  | "task_4_missing" // Tidak ada record START sama sekali
-  | "out_of_order" // Task diterima tidak urut
+  // Task 3 (CHECKIN) issues
+  | "checkin_register_not_sent" // Task 3 diterima tapi task 1 (REGISTER) belum SENT_BPJS
+
+  // Task 4 (START) issues
+  | "start_register_not_sent" // Task 4 diterima tapi task 1 (REGISTER) belum SENT_BPJS
+  | "start_checkin_not_sent" // Task 4 diterima tapi task 3 (CHECKIN) belum SENT_BPJS
+
+  // Task 5 (FINISH) issues
+  | "finish_register_not_sent" // Task 5 diterima tapi task 1 (REGISTER) belum SENT_BPJS
+  | "finish_start_not_sent" // Task 5 diterima tapi task 4 (START) belum SENT_BPJS
+
+  // Task 6 (PHARMACY_STARTED) issues
+  | "pharmacy_register_not_sent" // Task 6 diterima tapi task 1 (REGISTER) belum SENT_BPJS
+  | "pharmacy_finish_not_sent" // Task 6 diterima tapi task 5 (FINISH) belum SENT_BPJS
+
+  // Task 7 (CLOSE) issues
+  | "close_register_not_sent" // Task 7 diterima tapi task 1 (REGISTER) belum SENT_BPJS
+  | "close_finish_not_sent" // Task 7 diterima tapi task 5 (FINISH) belum SENT_BPJS
+
+  // Generic issues
+  | "out_of_order" // Task diterima tidak sesuai urutan
   | "unknown";
+
+/**
+ * Determine validation reason based on task_id and missing predecessor
+ */
+export function getTaskValidationReason(
+  taskId: number,
+  missingPredecessorTaskId: number,
+): TaskValidationReason {
+  // Task 3 (CHECKIN) dependencies
+  if (taskId === 3) {
+    if (missingPredecessorTaskId === 1) return "checkin_register_not_sent";
+  }
+
+  // Task 4 (START) dependencies
+  if (taskId === 4) {
+    if (missingPredecessorTaskId === 1) return "start_register_not_sent";
+    if (missingPredecessorTaskId === 3) return "start_checkin_not_sent";
+  }
+
+  // Task 5 (FINISH) dependencies
+  if (taskId === 5) {
+    if (missingPredecessorTaskId === 1) return "finish_register_not_sent";
+    if (missingPredecessorTaskId === 4) return "finish_start_not_sent";
+  }
+
+  // Task 6 (PHARMACY_STARTED) dependencies
+  if (taskId === 6) {
+    if (missingPredecessorTaskId === 1) return "pharmacy_register_not_sent";
+    if (missingPredecessorTaskId === 5) return "pharmacy_finish_not_sent";
+  }
+
+  // Task 7 (CLOSE) dependencies
+  if (taskId === 7) {
+    if (missingPredecessorTaskId === 1) return "close_register_not_sent";
+    if (missingPredecessorTaskId === 5) return "close_finish_not_sent";
+  }
+
+  return "unknown";
+}
 
 /**
  * Log task validation error untuk tracking data quality issues

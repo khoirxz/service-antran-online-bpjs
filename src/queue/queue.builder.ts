@@ -8,7 +8,10 @@ import {
   isRegisterSent,
   isTaskSent,
 } from "../domain/task.progress";
-import { logTaskValidationError } from "../domain/task.validator";
+import {
+  logTaskValidationError,
+  getTaskValidationReason,
+} from "../domain/task.validator";
 
 /**
  * Build queue dari VisitEvent
@@ -120,37 +123,80 @@ export async function buildQueue() {
 
       if (!registerSent) {
         console.log(
-          `⏭️  Skip update ${event.visit_id} (task_id ${task_id}) karena REGISTER belum terkirim`,
+          `⏭️  Skip update ${event.visit_id} (task_id ${task_id}) karena REGISTER (task 1) belum terkirim`,
         );
-        // Log validation error - task received tapi REGISTER belum terkirim
+        const reason = getTaskValidationReason(task_id, 1);
         await logTaskValidationError(
           event.visit_id,
           task_id,
-          1, // expected
-          null,
-          "task_3_not_sent", // atau task_4_not_sent, etc sesuai task_id
+          1,
+          1,
+          reason,
           undefined,
-          `Task ${task_id} diterima tapi REGISTER (task 1) belum terkirim ke BPJS`,
+          `Task ${task_id} diterima tapi REGISTER (task 1) belum dikirim ke BPJS`,
         );
         continue;
       }
 
-      // Untuk task 5, 6 & 7: pastikan task 4 sudah SENT_BPJS (dokter sudah mulai periksa)
+      // Untuk task 4: pastikan task 3 (CHECKIN) sudah terkirim
+      if (task_id === 4) {
+        const task3Sent = isTaskSent(event.task_progress, 3);
+        if (!task3Sent) {
+          console.log(
+            `⏭️  Skip update ${event.visit_id} (task_id ${task_id}) karena task 3 (CHECKIN) belum terkirim`,
+          );
+          const reason = getTaskValidationReason(task_id, 3);
+          await logTaskValidationError(
+            event.visit_id,
+            task_id,
+            3,
+            3,
+            reason,
+            undefined,
+            `Task ${task_id} diterima tapi task 3 (CHECKIN) belum dikirim ke BPJS`,
+          );
+          continue;
+        }
+      }
+
+      // Untuk task 5, 6, 7: pastikan task 4 (START) sudah terkirim
       if (task_id === 5 || task_id === 6 || task_id === 7) {
         const task4Sent = isTaskSent(event.task_progress, 4);
         if (!task4Sent) {
           console.log(
-            `⏭️  Skip update ${event.visit_id} (task_id ${task_id}) karena task 4 belum terkirim`,
+            `⏭️  Skip update ${event.visit_id} (task_id ${task_id}) karena task 4 (START) belum terkirim`,
           );
-          // Log validation error - task 5/6/7 received tapi task 4 belum terkirim
+          const reason = getTaskValidationReason(task_id, 4);
           await logTaskValidationError(
             event.visit_id,
             task_id,
-            4, // expected
-            null,
-            "task_4_not_sent",
+            4,
+            4,
+            reason,
             undefined,
-            `Task ${task_id} diterima tapi task 4 (START) belum terkirim ke BPJS`,
+            `Task ${task_id} diterima tapi task 4 (START) belum dikirim ke BPJS`,
+          );
+          continue;
+        }
+      }
+
+      // Untuk task 7 (CLOSE): pastikan task 5 (FINISH) atau task 6 (PHARMACY_STARTED) sudah terkirim
+      if (task_id === 7) {
+        const task5Sent = isTaskSent(event.task_progress, 5);
+        const task6Sent = isTaskSent(event.task_progress, 6);
+        if (!task5Sent && !task6Sent) {
+          console.log(
+            `⏭️  Skip update ${event.visit_id} (task_id ${task_id}) karena task 5 dan 6 belum terkirim`,
+          );
+          const reason = getTaskValidationReason(task_id, 5);
+          await logTaskValidationError(
+            event.visit_id,
+            task_id,
+            5,
+            5,
+            reason,
+            undefined,
+            `Task ${task_id} diterima tapi task 5 (FINISH) dan 6 (PHARMACY) belum dikirim ke BPJS`,
           );
           continue;
         }

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { Request, Response } from "express";
 import {
   getPendingValidationIssues,
   resolveValidationIssue,
@@ -7,21 +8,68 @@ import {
 import prisma from "../lib/prisma";
 import { serializeBigInt } from "../utils/bigInt";
 
+// Config
+const PAGINATION_CONFIG = {
+  DEFAULT_PAGE_SIZE: 10,
+  DEFAULT_VALIDATION_HISTORY_SIZE: 20,
+  MAX_PAGE_SIZE: 100,
+};
+
 const router: Router = Router();
+
+// Utility functions
+const validateBigInt = (
+  value: string | string[] | undefined,
+): bigint | null => {
+  if (!value || Array.isArray(value)) return null;
+  try {
+    return BigInt(value);
+  } catch {
+    return null;
+  }
+};
+
+const ensureString = (value: string | string[] | undefined): string | null => {
+  if (!value || Array.isArray(value)) return null;
+  return value.trim() === "" ? null : value;
+};
+
+const validatePaginationParams = (
+  page?: string | string[],
+  pageSize?: string | string[],
+  defaultSize: number = PAGINATION_CONFIG.DEFAULT_PAGE_SIZE,
+) => {
+  const pageStr = Array.isArray(page) ? page[0] : page;
+  const pageSizeStr = Array.isArray(pageSize) ? pageSize[0] : pageSize;
+
+  const parsedPage = Math.max(1, parseInt(pageStr || "1", 10) || 1);
+  const parsedPageSize = Math.min(
+    PAGINATION_CONFIG.MAX_PAGE_SIZE,
+    Math.max(
+      1,
+      parseInt(pageSizeStr || String(defaultSize), 10) || defaultSize,
+    ),
+  );
+
+  return {
+    page: parsedPageSize <= 0 ? 1 : parsedPage,
+    pageSize: parsedPageSize,
+    skip: (parsedPage - 1) * parsedPageSize,
+  };
+};
 
 /**
  * GET /admin/tasks/invalid
  * Get all pending task validation issues grouped by visit
  * Query params: page (default: 1), pageSize (default: 10, max: 100)
  */
-router.get("/tasks/invalid", async (req, res) => {
+router.get("/tasks/invalid", async (req: Request, res: Response) => {
   try {
-    const page = Math.max(1, parseInt(req.query.page as string) || 1);
-    const pageSize = Math.min(
-      100,
-      Math.max(1, parseInt(req.query.pageSize as string) || 10),
+    const { page, pageSize, skip } = validatePaginationParams(
+      req.query.page as string,
+      req.query.pageSize as string,
+      PAGINATION_CONFIG.DEFAULT_PAGE_SIZE,
     );
-    const skip = (page - 1) * pageSize;
 
     const issues = await getPendingValidationIssues();
     const totalVisitsWithIssues = issues.length;
@@ -123,112 +171,161 @@ router.get("/tasks/invalid/stats", async (req, res) => {
  * POST /admin/tasks/invalid/:id/resolve
  * Mark validation issue as resolved
  */
-router.post("/tasks/invalid/:id/resolve", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { notes } = req.body;
+router.post(
+  "/tasks/invalid/:id/resolve",
+  async (req: Request, res: Response) => {
+    try {
+      const id = ensureString(req.params.id);
+      const { notes } = req.body;
 
-    const resolved = await resolveValidationIssue(BigInt(id), notes);
+      // Validate ID
+      if (!id) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid ID format",
+        });
+      }
 
-    return res.json(
-      serializeBigInt({
-        success: true,
-        message: "Validation issue marked as resolved",
-        data: resolved,
-      }),
-    );
-  } catch (error) {
-    console.error("Failed to resolve validation issue:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to resolve validation issue",
-      error: (error as Error).message,
-    });
-  }
-});
+      const bigIntId = validateBigInt(id);
+      if (!bigIntId) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid ID format",
+        });
+      }
+
+      const resolved = await resolveValidationIssue(bigIntId, notes);
+
+      return res.json(
+        serializeBigInt({
+          success: true,
+          message: "Validation issue marked as resolved",
+          data: resolved,
+        }),
+      );
+    } catch (error) {
+      console.error("Failed to resolve validation issue:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to resolve validation issue",
+        error: (error as Error).message,
+      });
+    }
+  },
+);
 
 /**
  * POST /admin/tasks/invalid/:id/ignore
  * Mark validation issue as ignored
  */
-router.post("/tasks/invalid/:id/ignore", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { notes } = req.body;
+router.post(
+  "/tasks/invalid/:id/ignore",
+  async (req: Request, res: Response) => {
+    try {
+      const id = ensureString(req.params.id);
+      const { notes } = req.body;
 
-    const ignored = await ignoreValidationIssue(BigInt(id), notes);
+      // Validate ID
+      if (!id) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid ID format",
+        });
+      }
 
-    return res.json(
-      serializeBigInt({
-        success: true,
-        message: "Validation issue marked as ignored",
-        data: ignored,
-      }),
-    );
-  } catch (error) {
-    console.error("Failed to ignore validation issue:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to ignore validation issue",
-      error: (error as Error).message,
-    });
-  }
-});
+      const bigIntId = validateBigInt(id);
+      if (!bigIntId) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid ID format",
+        });
+      }
+
+      const ignored = await ignoreValidationIssue(bigIntId, notes);
+
+      return res.json(
+        serializeBigInt({
+          success: true,
+          message: "Validation issue marked as ignored",
+          data: ignored,
+        }),
+      );
+    } catch (error) {
+      console.error("Failed to ignore validation issue:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to ignore validation issue",
+        error: (error as Error).message,
+      });
+    }
+  },
+);
 
 /**
  * GET /admin/visits/:visitId/validation-history
  * Get validation history for a specific visit with pagination
  * Query params: page (default: 1), pageSize (default: 20, max: 100)
  */
-router.get("/visits/:visitId/validation-history", async (req, res) => {
-  try {
-    const { visitId } = req.params;
-    const page = Math.max(1, parseInt(req.query.page as string) || 1);
-    const pageSize = Math.min(
-      100,
-      Math.max(1, parseInt(req.query.pageSize as string) || 20),
-    );
-    const skip = (page - 1) * pageSize;
+router.get(
+  "/visits/:visitId/validation-history",
+  async (req: Request, res: Response) => {
+    try {
+      const visitId = ensureString(req.params.visitId);
 
-    const [history, totalCount] = await Promise.all([
-      prisma.taskValidationLog.findMany({
-        where: {
-          visit_id: visitId,
-        },
-        orderBy: {
-          detected_at: "desc",
-        },
-        skip,
-        take: pageSize,
-      }),
-      prisma.taskValidationLog.count({
-        where: {
-          visit_id: visitId,
-        },
-      }),
-    ]);
+      // Validate visitId
+      if (!visitId) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid visitId",
+        });
+      }
 
-    return res.json(
-      serializeBigInt({
-        success: true,
-        visitId,
-        pagination: {
-          page,
-          pageSize,
-          totalPages: Math.ceil(totalCount / pageSize),
-          totalLogs: totalCount,
-        },
-        data: history,
-      }),
-    );
-  } catch (error) {
-    console.error("Failed to fetch validation history:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch validation history",
-      error: (error as Error).message,
-    });
-  }
-});
+      const { page, pageSize, skip } = validatePaginationParams(
+        req.query.page as string | string[],
+        req.query.pageSize as string | string[],
+        PAGINATION_CONFIG.DEFAULT_VALIDATION_HISTORY_SIZE,
+      );
+
+      const [history, totalCount] = await Promise.all([
+        prisma.taskValidationLog.findMany({
+          where: {
+            visit_id: visitId,
+          },
+          orderBy: {
+            detected_at: "desc",
+          },
+          skip,
+          take: pageSize,
+        }),
+        prisma.taskValidationLog.count({
+          where: {
+            visit_id: visitId,
+          },
+        }),
+      ]);
+
+      return res.json(
+        serializeBigInt({
+          success: true,
+          visitId,
+          pagination: {
+            page,
+            pageSize,
+            totalPages: Math.ceil(totalCount / pageSize),
+            totalLogs: totalCount,
+          },
+          data: history,
+        }),
+      );
+    } catch (error) {
+      console.error("Failed to fetch validation history:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch validation history",
+        error: (error as Error).message,
+      });
+    }
+  },
+);
 
 export default router;
