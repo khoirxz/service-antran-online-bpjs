@@ -12,17 +12,35 @@ const router: Router = Router();
 /**
  * GET /admin/tasks/invalid
  * Get all pending task validation issues grouped by visit
+ * Query params: page (default: 1), pageSize (default: 10, max: 100)
  */
 router.get("/tasks/invalid", async (req, res) => {
   try {
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const pageSize = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.pageSize as string) || 10),
+    );
+    const skip = (page - 1) * pageSize;
+
     const issues = await getPendingValidationIssues();
+    const totalVisitsWithIssues = issues.length;
+    const totalIssues = issues.reduce((sum, v) => sum + v.issueCount, 0);
+
+    // Paginate the results
+    const paginatedIssues = issues.slice(skip, skip + pageSize);
 
     return res.json(
       serializeBigInt({
         success: true,
-        totalVisitsWithIssues: issues.length,
-        totalIssues: issues.reduce((sum, v) => sum + v.issueCount, 0),
-        data: issues.map((group) => ({
+        pagination: {
+          page,
+          pageSize,
+          totalPages: Math.ceil(totalVisitsWithIssues / pageSize),
+          totalVisitsWithIssues,
+          totalIssues,
+        },
+        data: paginatedIssues.map((group) => ({
           visit_id: group.visit_id,
           issueCount: group.issueCount,
           firstDetected: group.firstDetected,
@@ -159,26 +177,47 @@ router.post("/tasks/invalid/:id/ignore", async (req, res) => {
 
 /**
  * GET /admin/visits/:visitId/validation-history
- * Get validation history for a specific visit
+ * Get validation history for a specific visit with pagination
+ * Query params: page (default: 1), pageSize (default: 20, max: 100)
  */
 router.get("/visits/:visitId/validation-history", async (req, res) => {
   try {
     const { visitId } = req.params;
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const pageSize = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.pageSize as string) || 20),
+    );
+    const skip = (page - 1) * pageSize;
 
-    const history = await prisma.taskValidationLog.findMany({
-      where: {
-        visit_id: visitId,
-      },
-      orderBy: {
-        detected_at: "desc",
-      },
-    });
+    const [history, totalCount] = await Promise.all([
+      prisma.taskValidationLog.findMany({
+        where: {
+          visit_id: visitId,
+        },
+        orderBy: {
+          detected_at: "desc",
+        },
+        skip,
+        take: pageSize,
+      }),
+      prisma.taskValidationLog.count({
+        where: {
+          visit_id: visitId,
+        },
+      }),
+    ]);
 
     return res.json(
       serializeBigInt({
         success: true,
         visitId,
-        totalLogs: history.length,
+        pagination: {
+          page,
+          pageSize,
+          totalPages: Math.ceil(totalCount / pageSize),
+          totalLogs: totalCount,
+        },
         data: history,
       }),
     );

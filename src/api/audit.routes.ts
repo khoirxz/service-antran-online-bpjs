@@ -15,12 +15,26 @@ const router: ExpressRouter = express.Router();
 /**
  * GET /admin/events/blocked
  * Lihat semua event yang task_progress["1"].status = BLOCKED_BPJS
+ * Query params: limit, offset, startDate (YYYY-MM-DD), endDate (YYYY-MM-DD)
  */
 router.get("/events/blocked", async (req, res) => {
   try {
-    const { limit = "50", offset = "0" } = req.query;
+    const { limit = "50", offset = "0", startDate, endDate } = req.query;
+
+    // Build where clause dengan date filter
+    const whereClause: any = {};
+    if (startDate || endDate) {
+      whereClause.event_time = {};
+      if (startDate) {
+        whereClause.event_time.gte = new Date(`${startDate}T00:00:00Z`);
+      }
+      if (endDate) {
+        whereClause.event_time.lte = new Date(`${endDate}T23:59:59Z`);
+      }
+    }
 
     const events = await prisma.visitEvent.findMany({
+      where: whereClause,
       orderBy: {
         event_time: "desc",
       },
@@ -57,6 +71,10 @@ router.get("/events/blocked", async (req, res) => {
       serializeBigInt({
         total,
         data: blockedEvents,
+        filters: {
+          startDate: startDate || null,
+          endDate: endDate || null,
+        },
         pagination: {
           limit: parseInt(limit as string),
           offset: parseInt(offset as string),
@@ -196,10 +214,27 @@ router.post("/events/revalidate-all", async (req, res) => {
 /**
  * GET /admin/events/stats
  * Statistik status events berdasarkan task_progress["1"]
+ * Query params: startDate (YYYY-MM-DD), endDate (YYYY-MM-DD)
  */
 router.get("/events/stats", async (req, res) => {
   try {
-    const events = await prisma.visitEvent.findMany();
+    const { startDate, endDate } = req.query;
+
+    // Build where clause dengan date filter
+    const whereClause: any = {};
+    if (startDate || endDate) {
+      whereClause.event_time = {};
+      if (startDate) {
+        whereClause.event_time.gte = new Date(`${startDate}T00:00:00Z`);
+      }
+      if (endDate) {
+        whereClause.event_time.lte = new Date(`${endDate}T23:59:59Z`);
+      }
+    }
+
+    const events = await prisma.visitEvent.findMany({
+      where: whereClause,
+    });
 
     const stats: Record<string, number> = {
       DRAFT: 0,
@@ -217,7 +252,13 @@ router.get("/events/stats", async (req, res) => {
       }
     }
 
-    res.json(stats);
+    res.json({
+      filters: {
+        startDate: startDate || null,
+        endDate: endDate || null,
+      },
+      stats,
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -226,13 +267,26 @@ router.get("/events/stats", async (req, res) => {
 /**
  * GET /admin/queue/pending
  * Lihat job yang masih PENDING di queue
+ * Query params: limit, offset, startDate (YYYY-MM-DD), endDate (YYYY-MM-DD)
  */
 router.get("/queue/pending", async (req, res) => {
   try {
-    const { limit = "20", offset = "0" } = req.query;
+    const { limit = "20", offset = "0", startDate, endDate } = req.query;
+
+    // Build where clause dengan date filter
+    const whereClause: any = { status: "PENDING" };
+    if (startDate || endDate) {
+      whereClause.createdAt = {};
+      if (startDate) {
+        whereClause.createdAt.gte = new Date(`${startDate}T00:00:00Z`);
+      }
+      if (endDate) {
+        whereClause.createdAt.lte = new Date(`${endDate}T23:59:59Z`);
+      }
+    }
 
     const jobs = await prisma.bpjsAntreanQueue.findMany({
-      where: { status: "PENDING" },
+      where: whereClause,
       orderBy: { createdAt: "asc" },
       skip: parseInt(offset as string),
       take: parseInt(limit as string),
@@ -248,13 +302,17 @@ router.get("/queue/pending", async (req, res) => {
     });
 
     const total = await prisma.bpjsAntreanQueue.count({
-      where: { status: "PENDING" },
+      where: whereClause,
     });
 
     res.json(
       serializeBigInt({
         total,
         data: jobs,
+        filters: {
+          startDate: startDate || null,
+          endDate: endDate || null,
+        },
         pagination: {
           limit: parseInt(limit as string),
           offset: parseInt(offset as string),
@@ -269,13 +327,26 @@ router.get("/queue/pending", async (req, res) => {
 /**
  * GET /admin/queue/sent
  * Lihat job yang sudah berhasil dikirim (SEND)
+ * Query params: limit, offset, startDate (YYYY-MM-DD), endDate (YYYY-MM-DD)
  */
 router.get("/queue/sent", async (req, res) => {
   try {
-    const { limit = "50", offset = "0" } = req.query;
+    const { limit = "50", offset = "0", startDate, endDate } = req.query;
+
+    // Build where clause dengan date filter
+    const whereClause: any = { status: "SEND" };
+    if (startDate || endDate) {
+      whereClause.sentAt = {};
+      if (startDate) {
+        whereClause.sentAt.gte = new Date(`${startDate}T00:00:00Z`);
+      }
+      if (endDate) {
+        whereClause.sentAt.lte = new Date(`${endDate}T23:59:59Z`);
+      }
+    }
 
     const jobs = await prisma.bpjsAntreanQueue.findMany({
-      where: { status: "SEND" },
+      where: whereClause,
       orderBy: { sentAt: "desc" },
       skip: parseInt(offset as string),
       take: parseInt(limit as string),
@@ -290,13 +361,17 @@ router.get("/queue/sent", async (req, res) => {
     });
 
     const total = await prisma.bpjsAntreanQueue.count({
-      where: { status: "SEND" },
+      where: whereClause,
     });
 
     res.json(
       serializeBigInt({
         total,
         data: jobs,
+        filters: {
+          startDate: startDate || null,
+          endDate: endDate || null,
+        },
         pagination: {
           limit: parseInt(limit as string),
           offset: parseInt(offset as string),
@@ -311,13 +386,26 @@ router.get("/queue/sent", async (req, res) => {
 /**
  * GET /admin/queue/failed
  * Lihat job yang gagal setelah max retry (FAILED)
+ * Query params: limit, offset, startDate (YYYY-MM-DD), endDate (YYYY-MM-DD)
  */
 router.get("/queue/failed", async (req, res) => {
   try {
-    const { limit = "20", offset = "0" } = req.query;
+    const { limit = "20", offset = "0", startDate, endDate } = req.query;
+
+    // Build where clause dengan date filter
+    const whereClause: any = { status: "FAILED" };
+    if (startDate || endDate) {
+      whereClause.updatedAt = {};
+      if (startDate) {
+        whereClause.updatedAt.gte = new Date(`${startDate}T00:00:00Z`);
+      }
+      if (endDate) {
+        whereClause.updatedAt.lte = new Date(`${endDate}T23:59:59Z`);
+      }
+    }
 
     const jobs = await prisma.bpjsAntreanQueue.findMany({
-      where: { status: "FAILED" },
+      where: whereClause,
       orderBy: { updatedAt: "desc" },
       skip: parseInt(offset as string),
       take: parseInt(limit as string),
@@ -333,13 +421,17 @@ router.get("/queue/failed", async (req, res) => {
     });
 
     const total = await prisma.bpjsAntreanQueue.count({
-      where: { status: "FAILED" },
+      where: whereClause,
     });
 
     res.json(
       serializeBigInt({
         total,
         data: jobs,
+        filters: {
+          startDate: startDate || null,
+          endDate: endDate || null,
+        },
         pagination: {
           limit: parseInt(limit as string),
           offset: parseInt(offset as string),
@@ -388,17 +480,36 @@ router.post("/queue/:id/retry", async (req, res) => {
 /**
  * GET /admin/queue/logs?queue_id=123
  * Lihat logs dari queue job
+ * Query params: queue_id (required), limit, offset, startDate (YYYY-MM-DD), endDate (YYYY-MM-DD)
  */
 router.get("/queue/logs", async (req, res) => {
   try {
-    const { queue_id, limit = "20", offset = "0" } = req.query;
+    const {
+      queue_id,
+      limit = "20",
+      offset = "0",
+      startDate,
+      endDate,
+    } = req.query;
 
     if (!queue_id) {
       return res.status(400).json({ error: "Parameter queue_id wajib diisi" });
     }
 
+    // Build where clause dengan date filter
+    const whereClause: any = { queue_id: BigInt(queue_id as string) };
+    if (startDate || endDate) {
+      whereClause.createdAt = {};
+      if (startDate) {
+        whereClause.createdAt.gte = new Date(`${startDate}T00:00:00Z`);
+      }
+      if (endDate) {
+        whereClause.createdAt.lte = new Date(`${endDate}T23:59:59Z`);
+      }
+    }
+
     const logs = await prisma.bpjsAntreanLogs.findMany({
-      where: { queue_id: BigInt(queue_id as string) },
+      where: whereClause,
       orderBy: { createdAt: "desc" },
       skip: parseInt(offset as string),
       take: parseInt(limit as string),
@@ -408,6 +519,10 @@ router.get("/queue/logs", async (req, res) => {
       serializeBigInt({
         queue_id,
         total: logs.length,
+        filters: {
+          startDate: startDate || null,
+          endDate: endDate || null,
+        },
         data: logs,
       }),
     );
@@ -419,11 +534,27 @@ router.get("/queue/logs", async (req, res) => {
 /**
  * GET /admin/queue/stats
  * Statistik queue status
+ * Query params: startDate (YYYY-MM-DD), endDate (YYYY-MM-DD)
  */
 router.get("/queue/stats", async (req, res) => {
   try {
+    const { startDate, endDate } = req.query;
+
+    // Build where clause dengan date filter
+    const whereClause: any = {};
+    if (startDate || endDate) {
+      whereClause.createdAt = {};
+      if (startDate) {
+        whereClause.createdAt.gte = new Date(`${startDate}T00:00:00Z`);
+      }
+      if (endDate) {
+        whereClause.createdAt.lte = new Date(`${endDate}T23:59:59Z`);
+      }
+    }
+
     const stats = await prisma.bpjsAntreanQueue.groupBy({
       by: ["status"],
+      where: whereClause,
       _count: {
         id: true,
       },
@@ -438,14 +569,31 @@ router.get("/queue/stats", async (req, res) => {
     );
 
     // Hitung average retry count untuk failed jobs
+    const failedJobsWhereClause: any = { status: "FAILED" };
+    if (startDate || endDate) {
+      failedJobsWhereClause.createdAt = {};
+      if (startDate) {
+        failedJobsWhereClause.createdAt.gte = new Date(
+          `${startDate}T00:00:00Z`,
+        );
+      }
+      if (endDate) {
+        failedJobsWhereClause.createdAt.lte = new Date(`${endDate}T23:59:59Z`);
+      }
+    }
+
     const failedJobs = await prisma.bpjsAntreanQueue.aggregate({
-      where: { status: "FAILED" },
+      where: failedJobsWhereClause,
       _avg: {
         retry_count: true,
       },
     });
 
     res.json({
+      filters: {
+        startDate: startDate || null,
+        endDate: endDate || null,
+      },
       ...formatted,
       failed_avg_retry: failedJobs._avg.retry_count || 0,
     });
