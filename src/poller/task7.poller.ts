@@ -13,10 +13,7 @@ import {
   commitBatchCursor,
   rollbackBatchCursor,
 } from "../storage/polling.state";
-import {
-  createUtcDateFromLocalDateString,
-  createUtcDateTimeFromLocal,
-} from "../utils/formatDate";
+import { createUtcDateTimeFromLocal } from "../utils/formatDate";
 import { updateTaskProgress } from "../domain/task.progress";
 
 export async function pollTaskId7Event() {

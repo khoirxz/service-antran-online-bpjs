@@ -2,14 +2,13 @@
  * Admin routes untuk monitoring dan manual operation
  */
 
-import express, { Router } from "express";
+import express from "express";
 import type { Router as ExpressRouter } from "express";
 import { manualRefreshQuota } from "../scheduler/quota.scheduler";
 import { manualSyncPoli } from "../scheduler/poli.scheduler";
 import { calculateQuota } from "../domain/quota.aggregator";
 import prisma from "../lib/prisma";
 import { formatLocalDate } from "../utils/formatDate";
-import { syncPoliData } from "../domain/poli.aggregator";
 import { serializeBigInt } from "../utils/bigInt";
 
 const router: ExpressRouter = express.Router();

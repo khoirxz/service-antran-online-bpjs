@@ -3,9 +3,7 @@ import {
   buildRegisterPayload,
   buildTaskUpdatePayload,
 } from "../domain/queue.payload";
-import { mapEventToTaskId } from "../domain/task.mapper";
 import {
-  isRegisterReady,
   getTaskProgress,
   isRegisterSent,
   isTaskSent,

@@ -2,7 +2,7 @@
  * Admin routes untuk audit dan manage blocked events
  */
 
-import express, { Router } from "express";
+import express from "express";
 import type { Router as ExpressRouter } from "express";
 import prisma from "../lib/prisma";
 import { validateRegistration } from "../domain/hfis.validator";
