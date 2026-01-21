@@ -4,27 +4,40 @@ import {
   buildTaskUpdatePayload,
 } from "../domain/queue.payload";
 import { mapEventToTaskId } from "../domain/task.mapper";
-import { isTaskSent, getTaskProgress } from "../domain/task.progress";
+import {
+  isRegisterReady,
+  getTaskProgress,
+  isRegisterSent,
+  isTaskSent,
+} from "../domain/task.progress";
+import { logTaskValidationError } from "../domain/task.validator";
 
 /**
  * Build queue dari VisitEvent
- * - REGISTER (task_id=1) untuk events READY_BPJS
+ * - REGISTER (task_id=1) untuk events dengan task_progress["1"].status=READY_BPJS
  * - UPDATE (task_id 3/4/5) untuk CHECKIN/START/FINISH (tracked dalam task_progress)
  */
 export async function buildQueue() {
-  // 1) REGISTER events
+  // 1) REGISTER events (READY_BPJS)
   const registerEvents = await prisma.visitEvent.findMany({
     where: {
       is_jkn: true,
-      status: "READY_BPJS",
     },
     orderBy: { event_time: "asc" },
     take: 100,
   });
 
-  console.log(`📦 Found ${registerEvents.length} REGISTER events to queue`);
+  console.log(
+    `📦 Checking ${registerEvents.length} events for REGISTER queueing`,
+  );
 
   for (const event of registerEvents) {
+    const progress = getTaskProgress(event.task_progress);
+    const registerStatus = progress["1"]?.status;
+
+    // Skip jika bukan READY_BPJS
+    if (registerStatus !== "READY_BPJS") continue;
+
     const task_id = 1;
 
     const exists = await prisma.bpjsAntreanQueue.findUnique({
@@ -64,19 +77,19 @@ export async function buildQueue() {
   }
 
   // 2) UPDATE events (CHECKIN/START/FINISH from task_progress)
-  const allEvents = await prisma.visitEvent.findMany({
+  const updateEvents = await prisma.visitEvent.findMany({
     orderBy: { event_time: "asc" },
     take: 500,
   });
 
   console.log(
-    `🕒 Found ${allEvents.length} total events, checking task_progress...`,
+    `🕒 Found ${updateEvents.length} total events, checking task_progress...`,
   );
 
-  // Task IDs to check: 3=CHECKIN, 4=START, 5=FINISH
-  const updateTaskIds = [3, 4, 5];
+  // Task IDs to check: 3=CHECKIN, 4=START, 5=FINISH, 6=PHARMACY_STARTED, 7=CLOSE
+  const updateTaskIds = [3, 4, 5, 6, 7];
 
-  for (const event of allEvents) {
+  for (const event of updateEvents) {
     const progress = getTaskProgress(event.task_progress);
 
     for (const task_id of updateTaskIds) {
@@ -93,7 +106,7 @@ export async function buildQueue() {
 
       if (exists) continue;
 
-      // Pastikan REGISTER sudah berhasil dikirim: status SENT_BPJS atau queue SEND untuk task 1
+      // Pastikan REGISTER sudah berhasil dikirim
       const registerQueue = await prisma.bpjsAntreanQueue.findUnique({
         where: {
           visit_id_task_id: {
@@ -105,13 +118,44 @@ export async function buildQueue() {
       });
 
       const registerSent =
-        event.status === "SENT_BPJS" || registerQueue?.status === "SEND";
+        isRegisterSent(event.task_progress) || registerQueue?.status === "SEND";
 
       if (!registerSent) {
         console.log(
           `⏭️  Skip update ${event.visit_id} (task_id ${task_id}) karena REGISTER belum terkirim`,
         );
+        // Log validation error - task received tapi REGISTER belum terkirim
+        await logTaskValidationError(
+          event.visit_id,
+          task_id,
+          1, // expected
+          null,
+          "task_3_not_sent", // atau task_4_not_sent, etc sesuai task_id
+          undefined,
+          `Task ${task_id} diterima tapi REGISTER (task 1) belum terkirim ke BPJS`,
+        );
         continue;
+      }
+
+      // Untuk task 5, 6 & 7: pastikan task 4 sudah SENT_BPJS (dokter sudah mulai periksa)
+      if (task_id === 5 || task_id === 6 || task_id === 7) {
+        const task4Sent = isTaskSent(event.task_progress, 4);
+        if (!task4Sent) {
+          console.log(
+            `⏭️  Skip update ${event.visit_id} (task_id ${task_id}) karena task 4 belum terkirim`,
+          );
+          // Log validation error - task 5/6/7 received tapi task 4 belum terkirim
+          await logTaskValidationError(
+            event.visit_id,
+            task_id,
+            4, // expected
+            null,
+            "task_4_not_sent",
+            undefined,
+            `Task ${task_id} diterima tapi task 4 (START) belum terkirim ke BPJS`,
+          );
+          continue;
+        }
       }
 
       try {

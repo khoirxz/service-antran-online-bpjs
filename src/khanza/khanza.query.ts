@@ -84,7 +84,7 @@ export async function fetchRegisterEvents(lastDate: string, lastTime: string) {
 }
 
 export async function fetchTaskId(
-  taskId: 3 | 4 | 5,
+  taskId: 3 | 4 | 5 | 6 | 7,
   lastEventTime: string,
 ): Promise<{ no_rawat: string; event_time: string }[]> {
   const query = `

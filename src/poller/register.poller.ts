@@ -1,19 +1,19 @@
-/**
- * Poller berfungsi sebagai proses background yang secara berkala
- * mengambil data dari sistem eksternal (Khanza) dan menyimpannya
- * ke dalam database lokal menggunakan Prisma ORM.
- *
- * File ini khusus menangani polling untuk event pendaftaran pasien (REGISTER).
- */
 import { Prisma } from "@prisma/client";
 import { fetchRegisterEvents } from "../khanza/khanza.query";
 import prisma from "../lib/prisma";
-import { getPollingState, updatePollingState } from "../storage/polling.state";
+import {
+  getPollingState,
+  getPollingStateBatchCursor,
+  updateBatchCursor,
+  commitBatchCursor,
+  rollbackBatchCursor,
+} from "../storage/polling.state";
 import {
   calculateQuota,
   calculateEstimatedTime,
 } from "../domain/quota.aggregator";
 import { validateRegistration } from "../domain/hfis.validator";
+import { updateTaskProgress } from "../domain/task.progress";
 import {
   formatLocalDate,
   createUtcDateFromLocalDateString,
@@ -21,131 +21,170 @@ import {
 } from "../utils/formatDate";
 
 export async function pollRegisterEvents() {
-  const state = await getPollingState("REGISTER");
+  const source = "REGISTER";
+  const state = await getPollingState(source);
 
-  // ambil jam dari state dan pecah menjadi yyyy-mm-dd dan HH:MM:SS
-  const lastDate = state?.last_event_time?.toISOString().slice(0, 10);
-  const lastTime = state?.last_event_time?.toTimeString().slice(0, 8);
+  let batchNumber = 0;
+  let totalProcessed = 0;
 
-  const rows = await fetchRegisterEvents(
-    lastDate || "2000-01-01",
-    lastTime || "00:00:00",
-  );
+  try {
+    while (true) {
+      // Get current cursor dari batch state
+      const { cursor } = await getPollingStateBatchCursor(source);
 
-  let maxEventTime = state?.last_event_time;
+      // Extract date dan time dari cursor
+      const lastDate = cursor.slice(0, 10); // YYYY-MM-DD
+      const lastTime = cursor.slice(11, 19); // HH:MM:SS
 
-  for (const row of rows) {
-    // Format tanggal lokal tanpa konversi timezone
-    const tgl_registrasi = formatLocalDate(new Date(row.tgl_registrasi));
+      // Fetch batch 100 records
+      const rows = await fetchRegisterEvents(lastDate, lastTime);
 
-    // Simpan event_time sebagai UTC dengan jam-menit lokal agar tidak bergeser
-    const event_time = createUtcDateTimeFromLocal(
-      tgl_registrasi,
-      row.jam_registrasi,
-    );
+      if (rows.length === 0) {
+        console.log(
+          `✅ [REGISTER] Finished: ${batchNumber} batches, ${totalProcessed} total events`,
+        );
+        return;
+      }
 
-    // Simpan tanggal sebagai UTC midnight agar tidak bergeser mundur saat insert
-    const tanggal = createUtcDateFromLocalDateString(tgl_registrasi);
+      batchNumber++;
+      let batchMaxEventTime = new Date(cursor.replace(" ", "T") + "Z");
 
-    console.log("Memproses event register untuk:", event_time, row.no_rawat);
-
-    // skip jika terdapat anomali
-    if (event_time <= state?.last_event_time!) continue;
-
-    try {
-      // 1. Validasi data terhadap HFIS
-      const validation = await validateRegistration(
-        row.kd_poli,
-        row.kd_dokter,
-        tgl_registrasi,
-        row.no_reg,
-        row.no_rawat,
+      console.log(
+        `📦 [REGISTER] Starting batch ${batchNumber} with ${rows.length} records from cursor: ${cursor}`,
       );
 
-      // 2. Jika valid, hitung kuota dan estimasi
-      let quotaInfo = null;
-      let estimasiUnix = 0;
+      for (const row of rows) {
+        // Format tanggal lokal tanpa konversi timezone
+        const tgl_registrasi = formatLocalDate(new Date(row.tgl_registrasi));
 
-      if (validation.isValid) {
-        quotaInfo = await calculateQuota(
-          row.kd_poli,
-          row.kd_dokter,
+        // Simpan event_time sebagai UTC dengan jam-menit lokal agar tidak bergeser
+        const event_time = createUtcDateTimeFromLocal(
           tgl_registrasi,
+          row.jam_registrasi,
         );
 
-        // Hitung estimasi waktu dilayani
-        const angkaAntrean = parseInt(row.no_reg, 10);
-        const jamMulai = row.jam_mulai.slice(0, 5);
-        estimasiUnix = calculateEstimatedTime(
-          tgl_registrasi,
-          jamMulai,
-          angkaAntrean,
-        );
-      }
+        // Simpan tanggal sebagai UTC midnight agar tidak bergeser mundur saat insert
+        const tanggal = createUtcDateFromLocalDateString(tgl_registrasi);
 
-      // 3. Build payload (hanya jika valid)
-      const payload = quotaInfo
-        ? {
-            kuota_jkn: quotaInfo.kuota_jkn,
-            sisa_kuota_jkn: quotaInfo.sisa_kuota_jkn,
-            kuota_nonjkn: quotaInfo.kuota_nonjkn,
-            sisa_kuota_nonjkn: quotaInfo.sisa_kuota_nonjkn,
-            estimasi_dilayani: estimasiUnix,
-            jam_praktek: quotaInfo.jam_praktek,
-            no_rm: row.no_rkm_medis,
-            jeniskunjungan: row.jenis_kunjungan,
+        // Track max event time dalam batch
+        if (event_time > batchMaxEventTime) {
+          batchMaxEventTime = event_time;
+        }
+
+        try {
+          // 1. Validasi data terhadap HFIS
+          const validation = await validateRegistration(
+            row.kd_poli,
+            row.kd_dokter,
+            tgl_registrasi,
+            row.no_reg,
+            row.no_rawat,
+          );
+
+          // 2. Jika valid, hitung kuota dan estimasi
+          let quotaInfo = null;
+          let estimasiUnix = 0;
+
+          if (validation.isValid) {
+            quotaInfo = await calculateQuota(
+              row.kd_poli,
+              row.kd_dokter,
+              tgl_registrasi,
+            );
+
+            // Hitung estimasi waktu dilayani
+            const angkaAntrean = parseInt(row.no_reg, 10);
+            const jamMulai = row.jam_mulai.slice(0, 5);
+            estimasiUnix = calculateEstimatedTime(
+              tgl_registrasi,
+              jamMulai,
+              angkaAntrean,
+            );
           }
-        : Prisma.JsonNull;
 
-      // 4. Create event dengan status berdasarkan validasi
-      const angkaAntrean = parseInt(row.no_reg, 10);
+          // 3. Build payload snapshot (kuota + estimasi dari polling time)
+          const payload = quotaInfo
+            ? {
+                kuota_jkn: quotaInfo.kuota_jkn,
+                sisa_kuota_jkn: quotaInfo.sisa_kuota_jkn,
+                kuota_nonjkn: quotaInfo.kuota_nonjkn,
+                sisa_kuota_nonjkn: quotaInfo.sisa_kuota_nonjkn,
+                estimasi_dilayani: estimasiUnix,
+                jam_praktek: quotaInfo.jam_praktek,
+              }
+            : Prisma.JsonNull;
 
-      await prisma.visitEvent.create({
-        data: {
-          visit_id: row.no_rawat,
-          event_time: event_time,
+          // 4. Create event dengan task_progress berdasarkan validasi
+          const angkaAntrean = parseInt(row.no_reg, 10);
 
-          tanggal: tanggal,
-          jam_registrasi: row.jam_registrasi,
+          // Buat task_progress untuk REGISTER dengan status hasil validasi
+          const taskProgress = updateTaskProgress(
+            {},
+            1,
+            validation.status as any,
+            validation.blockedReason,
+          );
 
-          poli_id: row.kd_poli,
-          dokter_id: row.kd_dokter,
+          await prisma.visitEvent.create({
+            data: {
+              visit_id: row.no_rawat,
+              event_time: event_time,
 
-          nomor_antrean: row.no_reg,
-          angka_antrean: angkaAntrean,
+              tanggal: tanggal,
+              jam_registrasi: row.jam_registrasi,
 
-          is_jkn: true,
+              poli_id: row.kd_poli,
+              dokter_id: row.kd_dokter,
+              no_rkm_medis: row.no_rkm_medis,
 
-          // Set status berdasarkan hasil validasi
-          status: validation.status,
-          blocked_reason: validation.blockedReason,
+              nomor_antrean: row.no_reg,
+              angka_antrean: angkaAntrean,
 
-          payload: payload as Prisma.NullableJsonNullValueInput,
-        },
-      });
+              is_jkn: true,
 
-      if (validation.isValid) {
-        console.log(
-          `✅ Event register ${row.no_rawat} READY_BPJS - kuota: JKN=${quotaInfo?.sisa_kuota_jkn}/${quotaInfo?.kuota_jkn}`,
-        );
-      } else {
-        console.warn(
-          `⚠️  Event register ${row.no_rawat} ${validation.status} - ${validation.blockedReason}`,
-        );
+              payload: payload as Prisma.NullableJsonNullValueInput,
+              task_progress: taskProgress as any,
+            },
+          });
+
+          if (validation.isValid) {
+            console.log(
+              `✅ Event register ${row.no_rawat} READY_BPJS - kuota: JKN=${quotaInfo?.sisa_kuota_jkn}/${quotaInfo?.kuota_jkn}`,
+            );
+          } else {
+            console.warn(
+              `⚠️  Event register ${row.no_rawat} ${validation.status} - ${validation.blockedReason}`,
+            );
+          }
+
+          totalProcessed++;
+        } catch (error: any) {
+          if (error.code !== "P2002") {
+            console.error(`❌ Error processing ${row.no_rawat}:`, error);
+          }
+        }
       }
-    } catch (error: any) {
-      if (error.code !== "P2002") {
-        console.error("Gagal menyimpan event register:", error);
-      }
 
-      if (event_time > maxEventTime!) {
-        maxEventTime = event_time;
-      }
+      // Update batch cursor (track pending batch)
+      const cursorStr = batchMaxEventTime
+        .toISOString()
+        .replace("T", " ")
+        .substring(0, 19);
+      await updateBatchCursor(source, cursorStr);
+
+      console.log(
+        `✅ [REGISTER] Batch ${batchNumber} completed: ${rows.length} events, new cursor: ${cursorStr}`,
+      );
+
+      // Small delay to avoid overloading DB
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
-  }
-
-  // update watermark
-  if (maxEventTime! > state?.last_event_time!) {
-    await updatePollingState("REGISTER", maxEventTime!);
+  } catch (error) {
+    console.error(`❌ [REGISTER] Error in batch ${batchNumber}:`, error);
+    // Rollback pending cursor on error
+    await rollbackBatchCursor(source);
+  } finally {
+    // Commit progress: move pending_cursor to last_event_time
+    await commitBatchCursor(source);
   }
 }

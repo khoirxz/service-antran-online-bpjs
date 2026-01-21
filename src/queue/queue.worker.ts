@@ -59,31 +59,23 @@ export async function processQueueJob() {
         },
       });
 
-      // Update VisitEvent
+      // Update VisitEvent dengan task_progress
       const visitEvent = await prisma.visitEvent.findUnique({
         where: { visit_id: job.visit_id },
       });
 
       if (visitEvent) {
-        // Untuk REGISTER: ubah status event menjadi SENT_BPJS
-        if (job.task_id === 1) {
-          await prisma.visitEvent.update({
-            where: { visit_id: job.visit_id },
-            data: { status: "SENT_BPJS" },
-          });
-        } else {
-          // Untuk UPDATE (3/4/5): update task_progress
-          const newProgress = updateTaskProgress(
-            visitEvent.task_progress,
-            job.task_id,
-            "SENT_BPJS",
-          );
+        // Update task_progress untuk semua task (baik REGISTER maupun UPDATE)
+        const newProgress = updateTaskProgress(
+          visitEvent.task_progress,
+          job.task_id,
+          "SENT_BPJS",
+        );
 
-          await prisma.visitEvent.update({
-            where: { visit_id: job.visit_id },
-            data: { task_progress: newProgress as any },
-          });
-        }
+        await prisma.visitEvent.update({
+          where: { visit_id: job.visit_id },
+          data: { task_progress: newProgress as any },
+        });
       }
 
       console.log(
@@ -115,35 +107,24 @@ export async function processQueueJob() {
         },
       });
 
-      // Update VisitEvent
+      // Update VisitEvent dengan task_progress
       const visitEvent = await prisma.visitEvent.findUnique({
         where: { visit_id: job.visit_id },
       });
 
       if (visitEvent) {
-        if (job.task_id === 1) {
-          // REGISTER failed
-          await prisma.visitEvent.update({
-            where: { visit_id: job.visit_id },
-            data: {
-              status: "FAILED_BPJS",
-              blocked_reason: `BPJS submission failed after ${MAX_RETRY} attempts: ${errorMsg}`,
-            },
-          });
-        } else {
-          // UPDATE (3/4/5) failed
-          const newProgress = updateTaskProgress(
-            visitEvent.task_progress,
-            job.task_id,
-            "FAILED_BPJS",
-            errorMsg,
-          );
+        // Update task_progress untuk semua task (baik REGISTER maupun UPDATE)
+        const newProgress = updateTaskProgress(
+          visitEvent.task_progress,
+          job.task_id,
+          "FAILED_BPJS",
+          `BPJS submission failed after ${MAX_RETRY} attempts: ${errorMsg}`,
+        );
 
-          await prisma.visitEvent.update({
-            where: { visit_id: job.visit_id },
-            data: { task_progress: newProgress as any },
-          });
-        }
+        await prisma.visitEvent.update({
+          where: { visit_id: job.visit_id },
+          data: { task_progress: newProgress as any },
+        });
       }
 
       console.error(

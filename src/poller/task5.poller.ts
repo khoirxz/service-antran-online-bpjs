@@ -2,7 +2,10 @@ import { fetchTaskId } from "../khanza/khanza.query";
 import prisma from "../lib/prisma";
 import {
   ensurePollingState,
-  updatePollingState,
+  getPollingStateBatchCursor,
+  updateBatchCursor,
+  commitBatchCursor,
+  rollbackBatchCursor,
 } from "../storage/polling.state";
 import {
   createUtcDateFromLocalDateString,
@@ -12,65 +15,100 @@ import { updateTaskProgress } from "../domain/task.progress";
 
 export async function pollTaskId5Event() {
   // Task 5 = FINISH
-  const state = await ensurePollingState("FINISH");
+  const source = "FINISH";
+  await ensurePollingState(source);
 
-  if (!state) return;
+  let batchNumber = 0;
+  let totalProcessed = 0;
 
-  const rows = await fetchTaskId(5, state.last_event_time.toISOString());
+  try {
+    while (true) {
+      // Get current cursor
+      const { cursor } = await getPollingStateBatchCursor(source);
 
-  let maxEventTime = state.last_event_time;
+      // Fetch batch 100
+      const rows = await fetchTaskId(5, cursor);
 
-  for (const row of rows) {
-    const eventTimeStr = (
-      (row.event_time as any) instanceof Date
-        ? (row.event_time as unknown as Date).toISOString()
-        : row.event_time
-    ) as string;
-    const dateStr = eventTimeStr.slice(0, 10);
-    const timeStr = eventTimeStr.slice(11, 19);
-    const event_time = createUtcDateTimeFromLocal(dateStr, timeStr);
-    const tanggal = createUtcDateFromLocalDateString(dateStr);
-    console.log("Memproses event FINISH untuk:", event_time);
-
-    if (event_time <= state.last_event_time) continue;
-
-    try {
-      // Update existing REGISTER event dengan task progress FINISH
-      const existingEvent = await prisma.visitEvent.findUnique({
-        where: { visit_id: row.no_rawat },
-      });
-
-      if (!existingEvent) {
+      if (rows.length === 0) {
         console.log(
-          `⏭️  REGISTER event tidak ditemukan untuk ${row.no_rawat}, skip FINISH`,
+          `✅ [FINISH] Finished: ${batchNumber} batches, ${totalProcessed} total events`,
         );
-        continue;
+        return;
       }
 
-      const newProgress = updateTaskProgress(
-        existingEvent.task_progress,
-        5,
-        "DRAFT",
+      batchNumber++;
+      let batchMaxEventTime = new Date(cursor.replace(" ", "T") + "Z");
+
+      console.log(
+        `📦 [FINISH] Starting batch ${batchNumber} with ${rows.length} records from cursor: ${cursor}`,
       );
 
-      await prisma.visitEvent.update({
-        where: { visit_id: row.no_rawat },
-        data: {
-          task_progress: newProgress as any,
-        },
-      });
+      for (const row of rows) {
+        const eventTimeStr = (
+          (row.event_time as any) instanceof Date
+            ? (row.event_time as unknown as Date).toISOString()
+            : row.event_time
+        ) as string;
+        const dateStr = eventTimeStr.slice(0, 10);
+        const timeStr = eventTimeStr.slice(11, 19);
+        const event_time = createUtcDateTimeFromLocal(dateStr, timeStr);
 
-      console.log(`✅ Updated FINISH progress untuk ${row.no_rawat}`);
-    } catch (error: any) {
-      console.error("Gagal update FINISH progress:", error);
-    }
+        // Track max event time
+        if (event_time > batchMaxEventTime) {
+          batchMaxEventTime = event_time;
+        }
 
-    if (event_time > maxEventTime) {
-      maxEventTime = event_time;
+        try {
+          // Update existing REGISTER event dengan task progress FINISH
+          const existingEvent = await prisma.visitEvent.findUnique({
+            where: { visit_id: row.no_rawat },
+          });
+
+          if (!existingEvent) {
+            console.log(
+              `⏭️  REGISTER event tidak ditemukan untuk ${row.no_rawat}, skip FINISH`,
+            );
+            continue;
+          }
+
+          const newProgress = updateTaskProgress(
+            existingEvent.task_progress,
+            5,
+            "DRAFT",
+          );
+
+          await prisma.visitEvent.update({
+            where: { visit_id: row.no_rawat },
+            data: {
+              task_progress: newProgress as any,
+            },
+          });
+
+          console.log(`✅ Updated FINISH progress untuk ${row.no_rawat}`);
+          totalProcessed++;
+        } catch (error: any) {
+          console.error(`❌ Error updating ${row.no_rawat}:`, error);
+        }
+      }
+
+      // Update batch cursor
+      const cursorStr = batchMaxEventTime
+        .toISOString()
+        .replace("T", " ")
+        .substring(0, 19);
+      await updateBatchCursor(source, cursorStr);
+
+      console.log(
+        `✅ [FINISH] Batch ${batchNumber} completed: ${rows.length} events, new cursor: ${cursorStr}`,
+      );
+
+      // Small delay
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
-  }
-  // update watermark
-  if (maxEventTime > state.last_event_time) {
-    await updatePollingState("FINISH", maxEventTime);
+  } catch (error) {
+    console.error(`❌ [FINISH] Error in batch ${batchNumber}:`, error);
+    await rollbackBatchCursor(source);
+  } finally {
+    await commitBatchCursor(source);
   }
 }

@@ -15,7 +15,9 @@ datasource db {
 model PollingState {
   id              BigInt    @id @default(autoincrement())
   source          String    @unique @db.VarChar(50)
-  last_event_time DateTime  @db.Timestamp(6)
+  last_event_time DateTime  @db.Timestamp(6) // Last successfully processed event
+  pending_cursor  String?   @db.VarChar(100) // Cursor untuk batch yang sedang diproses
+  batch_count     Int       @default(0) // Jumlah batch yang telah diproses
   createdAt       DateTime  @default(now())
   updatedAt       DateTime? @updatedAt
 }
@@ -32,6 +34,10 @@ model VisitEvent {
   poli_id   String @db.VarChar(20)
   dokter_id String @db.VarChar(20)
 
+  // Patient essential data - needed for BPJS submission
+  // Nullable during migration, but should be populated
+  no_rkm_medis String? @db.VarChar(50)
+
   // Antrean 
   nomor_antrean String? @db.VarChar(20)
   angka_antrean Int?
@@ -39,13 +45,17 @@ model VisitEvent {
   // Flag apakah pasien menggunakan JKN atau bukan
   is_jkn Boolean @default(false)
 
-  // Status validasi terhadap HFIS BPJS untuk REGISTER
-  status         VisitEventStatus @default(DRAFT)
-  blocked_reason String?          @db.VarChar(255) // Alasan jika BLOCKED_BPJS
-  payload        Json?
+  // Snapshot jadwal + kuota dari polling time
+  // Contains: jam_praktek, kuota_jkn, sisa_kuota_jkn, kuota_nonjkn, sisa_kuota_nonjkn, estimasi_dilayani
+  payload Json?
 
-  // Track progress of tasks (CHECKIN=3, START=4, FINISH=5)
-  // { "1": { status: "SENT_BPJS", sentAt: "..." }, "3": { status: "SENT_BPJS", sentAt: "..." }, ... }
+  // Track progress of all tasks (1=REGISTER, 3=CHECKIN, 4=START, 5=FINISH)
+  // {
+  //   "1": { status: "DRAFT" | "READY_BPJS" | "BLOCKED_BPJS" | "SENT_BPJS" | "FAILED_BPJS", blocked_reason?, sentAt?, failedReason? },
+  //   "3": { status: "DRAFT" | "SENT_BPJS" | "FAILED_BPJS", sentAt?, failedReason? },
+  //   "4": { status: "DRAFT" | "SENT_BPJS" | "FAILED_BPJS", sentAt?, failedReason? },
+  //   "5": { status: "DRAFT" | "SENT_BPJS" | "FAILED_BPJS", sentAt?, failedReason? }
+  // }
   task_progress Json?
 
   createdAt DateTime  @default(now())
@@ -121,16 +131,34 @@ model Poli {
   @@index([poli_id])
 }
 
-enum VisitEventStatus {
-  DRAFT // Data belum lengkap
-  READY_BPJS // Valid secara HFIS
-  BLOCKED_BPJS // Invalid (kode dokter/poli tidak cocok)
-  SENT_BPJS // Sudah dikirim ke BPJS
-  FAILED_BPJS // Ditolak BPJS
+model TaskValidationLog {
+  id               BigInt    @id @default(autoincrement())
+  visit_id         String    @db.VarChar(50) // no rawat
+  expected_task_id Int? // Mana task yg diharapkan
+  actual_task_id   Int? // Mana task yg diterima
+  missing_task_id  Int? // Task mana yg hilang
+  error_reason     String    @db.VarChar(100) // task_4_not_sent, task_3_missing, out_of_order, etc
+  status           LogStatus @default(PENDING) // PENDING, RESOLVED, IGNORED
+  detected_at      DateTime  @default(now())
+  resolved_at      DateTime?
+  notes            String?   @db.Text
+  created_by       String?   @db.VarChar(50) // Staff ID / user yang perlu diingatkan
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime? @updatedAt
+
+  @@index([visit_id])
+  @@index([status])
+  @@index([detected_at])
 }
 
 enum Status {
   PENDING
   SEND
   FAILED
+}
+
+enum LogStatus {
+  PENDING
+  RESOLVED
+  IGNORED
 }

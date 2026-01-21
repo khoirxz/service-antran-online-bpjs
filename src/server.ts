@@ -4,6 +4,7 @@ import prisma from "./lib/prisma";
 import healthRoutes from "./api/health.routes";
 import quotaRoutes from "./api/quota.routes";
 import auditRoutes from "./api/audit.routes";
+import adminRoutes from "./api/admin.routes";
 
 const app: Application = express();
 const PORT = process.env.PORT || 3000;
@@ -21,6 +22,7 @@ app.get("/", (req: Request, res: Response) => {
 app.use("/health", healthRoutes);
 app.use("/admin", quotaRoutes);
 app.use("/admin", auditRoutes);
+app.use("/admin", adminRoutes);
 
 // Graceful shutdown
 process.on("SIGINT", async () => {

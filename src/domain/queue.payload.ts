@@ -35,6 +35,11 @@ interface RegisterPayload {
 /**
  * Build REGISTER payload dari VisitEvent
  * Task ID 1 = REGISTER
+ *
+ * Strategy:
+ * 1. Use no_rkm_medis from event (essential data from SIMRS)
+ * 2. Use payload snapshot (kuota + jadwal dari polling time)
+ * 3. Fetch jenis_kunjungan from HFIS if not in payload
  */
 export async function buildRegisterPayload(
   event: VisitEvent,
@@ -57,8 +62,11 @@ export async function buildRegisterPayload(
     throw new Error(`Poli ${event.poli_id} tidak ditemukan di database`);
   }
 
-  // Ambil quota info dari payload JSON
+  // Ambil quota info dari payload snapshot (saved during polling)
   const payloadData = event.payload as Record<string, any>;
+
+  // TODO: Fetch jenis_kunjungan from HFIS if needed
+  // const jenisKunjunganFromHFIS = await fetchJenisKunjungan(event.poli_id, event.no_rkm_medis);
 
   // Build payload
   return {
@@ -70,18 +78,20 @@ export async function buildRegisterPayload(
     kodepoli: event.poli_id,
     namapoli: poli.nama,
     pasienbaru: 0, // TODO: ambil dari Khanza
-    norm: payloadData?.norm ?? "-", // TODO: ambil dari Khanza
+    norm: event.no_rkm_medis, // Essential data from SIMRS
     tanggalperiksa: event.tanggal.toISOString().slice(0, 10),
     kodedokter: snapshot ? snapshot.dokter_id : event.dokter_id,
     namadokter: snapshot ? snapshot.nama_dokter : "-",
-    jampraktek: snapshot
-      ? `${snapshot.jam_mulai ?? ""}-${snapshot.jam_selesai ?? ""}`
-      : "", // Dari HFIS snapshot
-    jeniskunjungan: payloadData?.jeniskunjungan ?? 3, // Dari payload
+    jampraktek:
+      payloadData?.jam_praktek ??
+      (snapshot
+        ? `${snapshot.jam_mulai ?? ""}-${snapshot.jam_selesai ?? ""}`
+        : ""),
+    jeniskunjungan: payloadData?.jeniskunjungan ?? 3, // TODO: fetch from HFIS if needed
     nomorreferensi: "",
     nomorantrean: event.nomor_antrean ?? "",
     angkaantrean: event.angka_antrean ?? 0,
-    estimasidilayani: payloadData?.estimasi_dilayani ?? 0, // Unix timestamp
+    estimasidilayani: payloadData?.estimasi_dilayani ?? 0, // Unix timestamp from polling
     sisakuotajkn: payloadData?.sisa_kuota_jkn ?? 0,
     kuotajkn: payloadData?.kuota_jkn ?? 0,
     sisakuotanonjkn: payloadData?.sisa_kuota_nonjkn ?? 0,
@@ -91,7 +101,15 @@ export async function buildRegisterPayload(
 }
 
 /**
- * Build UPDATE payload untuk task 3, 4, 5
+ * Build UPDATE payload untuk task 3, 4, 5, 7
+ *
+ * Task payload sederhana:
+ * - Task 3 (CHECKIN): pasien tiba di poli
+ * - Task 4 (START): dokter mulai periksa
+ * - Task 5 (FINISH): dokter selesai periksa
+ * - Task 7 (CLOSE): obat selesai dibuat
+ *
+ * Format sama untuk semua: kodebooking + taskid + waktu (timestamp millisecond)
  */
 export async function buildTaskUpdatePayload(
   event: VisitEvent,

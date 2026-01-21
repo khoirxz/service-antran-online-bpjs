@@ -1,3 +1,9 @@
+/**
+ * Task 7 Poller - Polling waktu obat selesai dibuat
+ * Tahap akhir: obat sudah selesai dibuat di farmasi → update task_progress["7"] = DRAFT
+ * Nantinya queue worker akan enqueue ke BPJS untuk close case
+ */
+
 import { fetchTaskId } from "../khanza/khanza.query";
 import prisma from "../lib/prisma";
 import {
@@ -13,9 +19,9 @@ import {
 } from "../utils/formatDate";
 import { updateTaskProgress } from "../domain/task.progress";
 
-export async function pollTaskId3Event() {
-  // Task 3 = CHECKIN
-  const source = "CHECKIN";
+export async function pollTaskId7Event() {
+  // Task 7 = CLOSE (akhir waktu obat selesai dibuat)
+  const source = "CLOSE";
   await ensurePollingState(source);
 
   let batchNumber = 0;
@@ -27,11 +33,11 @@ export async function pollTaskId3Event() {
       const { cursor } = await getPollingStateBatchCursor(source);
 
       // Fetch batch 100
-      const rows = await fetchTaskId(3, cursor);
+      const rows = await fetchTaskId(7, cursor);
 
       if (rows.length === 0) {
         console.log(
-          `✅ [CHECKIN] Finished: ${batchNumber} batches, ${totalProcessed} total events`,
+          `✅ [CLOSE] Finished: ${batchNumber} batches, ${totalProcessed} total events`,
         );
         return;
       }
@@ -40,11 +46,10 @@ export async function pollTaskId3Event() {
       let batchMaxEventTime = new Date(cursor.replace(" ", "T") + "Z");
 
       console.log(
-        `📦 [CHECKIN] Starting batch ${batchNumber} with ${rows.length} records from cursor: ${cursor}`,
+        `📦 [CLOSE] Starting batch ${batchNumber} with ${rows.length} records from cursor: ${cursor}`,
       );
 
       for (const row of rows) {
-        // Parse tanggal & waktu lokal dari string DB
         const eventTimeStr = (
           (row.event_time as any) instanceof Date
             ? (row.event_time as unknown as Date).toISOString()
@@ -60,21 +65,23 @@ export async function pollTaskId3Event() {
         }
 
         try {
-          // Update existing REGISTER event dengan task progress CHECKIN
+          // Update existing REGISTER event dengan task progress CLOSE (task_id=7)
           const existingEvent = await prisma.visitEvent.findUnique({
             where: { visit_id: row.no_rawat },
           });
 
           if (!existingEvent) {
             console.log(
-              `⏭️  REGISTER event tidak ditemukan untuk ${row.no_rawat}, skip CHECKIN`,
+              `⏭️  REGISTER event tidak ditemukan untuk ${row.no_rawat}, skip CLOSE`,
             );
             continue;
           }
 
+          // Initialize task_progress["7"] dengan status DRAFT
+          // Queue worker nanti akan enqueue ke BPJS untuk close case
           const newProgress = updateTaskProgress(
             existingEvent.task_progress,
-            3,
+            7,
             "DRAFT",
           );
 
@@ -85,7 +92,7 @@ export async function pollTaskId3Event() {
             },
           });
 
-          console.log(`✅ Updated CHECKIN progress untuk ${row.no_rawat}`);
+          console.log(`✅ Updated CLOSE progress untuk ${row.no_rawat}`);
           totalProcessed++;
         } catch (error: any) {
           console.error(`❌ Error updating ${row.no_rawat}:`, error);
@@ -100,14 +107,14 @@ export async function pollTaskId3Event() {
       await updateBatchCursor(source, cursorStr);
 
       console.log(
-        `✅ [CHECKIN] Batch ${batchNumber} completed: ${rows.length} events, new cursor: ${cursorStr}`,
+        `✅ [CLOSE] Batch ${batchNumber} completed: ${rows.length} events, new cursor: ${cursorStr}`,
       );
 
       // Small delay
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   } catch (error) {
-    console.error(`❌ [CHECKIN] Error in batch ${batchNumber}:`, error);
+    console.error(`❌ [CLOSE] Error in batch ${batchNumber}:`, error);
     await rollbackBatchCursor(source);
   } finally {
     await commitBatchCursor(source);

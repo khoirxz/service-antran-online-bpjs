@@ -6,6 +6,7 @@ import express, { Router } from "express";
 import type { Router as ExpressRouter } from "express";
 import prisma from "../lib/prisma";
 import { validateRegistration } from "../domain/hfis.validator";
+import { updateTaskProgress, getTaskProgress } from "../domain/task.progress";
 import { retryFailedJob } from "../queue/queue.worker";
 import { serializeBigInt } from "../utils/bigInt";
 
@@ -13,41 +14,49 @@ const router: ExpressRouter = express.Router();
 
 /**
  * GET /admin/events/blocked
- * Lihat semua event yang BLOCKED_BPJS
+ * Lihat semua event yang task_progress["1"].status = BLOCKED_BPJS
  */
 router.get("/events/blocked", async (req, res) => {
   try {
     const { limit = "50", offset = "0" } = req.query;
 
     const events = await prisma.visitEvent.findMany({
-      where: {
-        status: "BLOCKED_BPJS",
-      },
       orderBy: {
         event_time: "desc",
       },
       skip: parseInt(offset as string),
       take: parseInt(limit as string),
-      select: {
-        id: true,
-        visit_id: true,
-        event_time: true,
-        poli_id: true,
-        dokter_id: true,
-        nomor_antrean: true,
-        blocked_reason: true,
-        createdAt: true,
-      },
     });
 
-    const total = await prisma.visitEvent.count({
-      where: { status: "BLOCKED_BPJS" },
-    });
+    // Filter untuk events yang task_progress["1"].status = BLOCKED_BPJS
+    const blockedEvents = events
+      .filter((event) => {
+        const progress = getTaskProgress(event.task_progress);
+        return progress["1"]?.status === "BLOCKED_BPJS";
+      })
+      .map((event) => {
+        const progress = getTaskProgress(event.task_progress);
+        return {
+          id: event.id,
+          visit_id: event.visit_id,
+          event_time: event.event_time,
+          poli_id: event.poli_id,
+          dokter_id: event.dokter_id,
+          nomor_antrean: event.nomor_antrean,
+          blocked_reason: progress["1"]?.blocked_reason,
+          createdAt: event.createdAt,
+        };
+      });
+
+    const total = events.filter((event) => {
+      const progress = getTaskProgress(event.task_progress);
+      return progress["1"]?.status === "BLOCKED_BPJS";
+    }).length;
 
     res.json(
       serializeBigInt({
         total,
-        data: events,
+        data: blockedEvents,
         pagination: {
           limit: parseInt(limit as string),
           offset: parseInt(offset as string),
@@ -63,7 +72,7 @@ router.get("/events/blocked", async (req, res) => {
 
 /**
  * POST /admin/events/:id/revalidate
- * Revalidasi event yang BLOCKED_BPJS
+ * Revalidasi event yang task_progress["1"].status = BLOCKED_BPJS
  */
 router.post("/events/:id/revalidate", async (req, res) => {
   try {
@@ -77,9 +86,10 @@ router.post("/events/:id/revalidate", async (req, res) => {
       return res.status(404).json({ error: "Event tidak ditemukan" });
     }
 
-    if (event.status !== "BLOCKED_BPJS") {
+    const progress = getTaskProgress(event.task_progress);
+    if (progress["1"]?.status !== "BLOCKED_BPJS") {
       return res.status(400).json({
-        error: `Event status bukan BLOCKED_BPJS (current: ${event.status})`,
+        error: `Event status bukan BLOCKED_BPJS (current: ${progress["1"]?.status})`,
       });
     }
 
@@ -92,21 +102,29 @@ router.post("/events/:id/revalidate", async (req, res) => {
       event.visit_id,
     );
 
-    // Update status
+    // Update task_progress["1"]
+    const newProgress = updateTaskProgress(
+      event.task_progress,
+      1,
+      validation.status,
+      validation.blockedReason,
+    );
+
     const updated = await prisma.visitEvent.update({
       where: { id: BigInt(id) },
       data: {
-        status: validation.status,
-        blocked_reason: validation.blockedReason,
+        task_progress: newProgress as any,
       },
     });
+
+    const updatedProgress = getTaskProgress(updated.task_progress);
 
     res.json(
       serializeBigInt({
         message: `Event ${id} revalidated`,
         previous_status: "BLOCKED_BPJS",
-        new_status: updated.status,
-        blocked_reason: updated.blocked_reason,
+        new_status: updatedProgress["1"]?.status,
+        blocked_reason: updatedProgress["1"]?.blocked_reason,
       }),
     );
   } catch (error: any) {
@@ -116,20 +134,24 @@ router.post("/events/:id/revalidate", async (req, res) => {
 
 /**
  * POST /admin/events/revalidate-all
- * Revalidasi semua event yang BLOCKED_BPJS
+ * Revalidasi semua event yang task_progress["1"].status = BLOCKED_BPJS
  */
 router.post("/events/revalidate-all", async (req, res) => {
   try {
     const events = await prisma.visitEvent.findMany({
-      where: { status: "BLOCKED_BPJS" },
       take: 100, // Batch 100
+    });
+
+    const blockedEvents = events.filter((event) => {
+      const progress = getTaskProgress(event.task_progress);
+      return progress["1"]?.status === "BLOCKED_BPJS";
     });
 
     let revalidated = 0;
     let nowReady = 0;
     let stillBlocked = 0;
 
-    for (const event of events) {
+    for (const event of blockedEvents) {
       const validation = await validateRegistration(
         event.poli_id,
         event.dokter_id,
@@ -138,11 +160,17 @@ router.post("/events/revalidate-all", async (req, res) => {
         event.visit_id,
       );
 
+      const newProgress = updateTaskProgress(
+        event.task_progress,
+        1,
+        validation.status,
+        validation.blockedReason,
+      );
+
       await prisma.visitEvent.update({
         where: { id: event.id },
         data: {
-          status: validation.status,
-          blocked_reason: validation.blockedReason,
+          task_progress: newProgress as any,
         },
       });
 
@@ -167,26 +195,29 @@ router.post("/events/revalidate-all", async (req, res) => {
 
 /**
  * GET /admin/events/stats
- * Statistik status events
+ * Statistik status events berdasarkan task_progress["1"]
  */
 router.get("/events/stats", async (req, res) => {
   try {
-    const stats = await prisma.visitEvent.groupBy({
-      by: ["status"],
-      _count: {
-        id: true,
-      },
-    });
+    const events = await prisma.visitEvent.findMany();
 
-    const formatted = stats.reduce(
-      (acc, stat) => {
-        acc[stat.status] = stat._count.id;
-        return acc;
-      },
-      {} as Record<string, number>,
-    );
+    const stats: Record<string, number> = {
+      DRAFT: 0,
+      READY_BPJS: 0,
+      BLOCKED_BPJS: 0,
+      SENT_BPJS: 0,
+      FAILED_BPJS: 0,
+    };
 
-    res.json(formatted);
+    for (const event of events) {
+      const progress = getTaskProgress(event.task_progress);
+      const status = progress["1"]?.status || "DRAFT";
+      if (status in stats) {
+        stats[status]++;
+      }
+    }
+
+    res.json(stats);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
