@@ -44,36 +44,101 @@ async function getPoliList(): Promise<string[]> {
   }
 }
 
+/**
+ * Batch refresh dengan rate limiting untuk mencegah overload BPJS API
+ * 5 poli per batch, 500ms delay antar batch
+ */
+async function batchRefreshSchedule(
+  poliList: string[],
+  tanggalList: string[],
+): Promise<void> {
+  const BATCH_SIZE = 5;
+  const BATCH_DELAY = 500; // ms
+
+  for (const tanggal of tanggalList) {
+    // Batch poli untuk menghindari overload
+    for (let i = 0; i < poliList.length; i += BATCH_SIZE) {
+      const batch = poliList.slice(i, i + BATCH_SIZE);
+
+      // Process batch secara parallel
+      await Promise.all(
+        batch.map(async (poli) => {
+          try {
+            await refreshDoctorScheduleFromBpjs(poli, tanggal);
+            console.log(`✅ Refresh ${poli} - ${tanggal}`);
+          } catch (error) {
+            console.error(`❌ Gagal refresh ${poli} - ${tanggal}:`, error);
+          }
+        }),
+      );
+
+      // Delay sebelum batch berikutnya
+      if (i + BATCH_SIZE < poliList.length) {
+        await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY));
+      }
+    }
+  }
+}
+
 export function startQuotaScheduler() {
-  // Refresh setiap hari jam 05:00 WIB
+  const POLI_LIST_CACHE: { list: string[]; expiry: number } = {
+    list: [],
+    expiry: 0,
+  };
+
+  // Helper function dengan caching untuk getPoliList
+  async function getPoliListCached(): Promise<string[]> {
+    if (
+      POLI_LIST_CACHE.list.length > 0 &&
+      Date.now() < POLI_LIST_CACHE.expiry
+    ) {
+      return POLI_LIST_CACHE.list;
+    }
+
+    const list = await getPoliList();
+    POLI_LIST_CACHE.list = list;
+    POLI_LIST_CACHE.expiry = Date.now() + 3600000; // Cache untuk 1 jam
+    return list;
+  }
+
+  // Refresh pagi jam 05:00 WIB (full refresh: hari ini + besok)
   cron.schedule("0 5 * * *", async () => {
-    console.log("🔄 Memulai refresh jadwal dokter dari BPJS...");
+    console.log("🌅 [05:00] Memulai full refresh jadwal dokter dari BPJS...");
 
     const today = new Date().toISOString().slice(0, 10);
     const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
 
-    // Ambil daftar poli dari database
-    const POLI_LIST = await getPoliList();
+    const poliList = await getPoliListCached();
+    await batchRefreshSchedule(poliList, [today, tomorrow]);
 
-    // Refresh untuk hari ini dan besok
-    for (const tanggal of [today, tomorrow]) {
-      for (const poli of POLI_LIST) {
-        try {
-          await refreshDoctorScheduleFromBpjs(poli, tanggal);
-          console.log(`✅ Refresh ${poli} - ${tanggal}`);
-
-          // Delay 500ms untuk menghindari rate limit
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        } catch (error) {
-          console.error(`❌ Gagal refresh ${poli} - ${tanggal}:`, error);
-        }
-      }
-    }
-
-    console.log("✅ Selesai refresh jadwal dokter");
+    console.log("✅ [05:00] Selesai full refresh jadwal dokter");
   });
 
-  console.log("📅 Quota scheduler started: refresh setiap hari jam 05:00 WIB");
+  // Refresh siang jam 12:00 WIB (light refresh: hanya hari ini)
+  cron.schedule("0 12 * * *", async () => {
+    console.log("☀️  [12:00] Memulai light refresh jadwal dokter dari BPJS...");
+
+    const today = new Date().toISOString().slice(0, 10);
+    const poliList = await getPoliListCached();
+    await batchRefreshSchedule(poliList, [today]);
+
+    console.log("✅ [12:00] Selesai light refresh jadwal dokter");
+  });
+
+  // Refresh sore jam 17:00 WIB (light refresh: hanya hari ini)
+  cron.schedule("0 17 * * *", async () => {
+    console.log("🌆 [17:00] Memulai light refresh jadwal dokter dari BPJS...");
+
+    const today = new Date().toISOString().slice(0, 10);
+    const poliList = await getPoliListCached();
+    await batchRefreshSchedule(poliList, [today]);
+
+    console.log("✅ [17:00] Selesai light refresh jadwal dokter");
+  });
+
+  console.log(
+    "📅 Quota scheduler started: full refresh 05:00, light refresh 12:00 & 17:00 WIB",
+  );
 }
 
 /**

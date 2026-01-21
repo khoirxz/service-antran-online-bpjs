@@ -66,6 +66,19 @@ export async function pollRegisterEvents() {
         // Simpan tanggal sebagai UTC midnight agar tidak bergeser mundur saat insert
         const tanggal = createUtcDateFromLocalDateString(tgl_registrasi);
 
+        // VALIDASI: Registrasi tidak boleh di tanggal masa depan
+        const today = new Date();
+        today.setHours(0, 0, 0, 0); // Set ke midnight hari ini
+        const registrasiDate = new Date(tanggal);
+        registrasiDate.setHours(0, 0, 0, 0); // Set ke midnight tanggal registrasi
+
+        if (registrasiDate > today) {
+          console.log(
+            `⏭️  Skip ${row.no_rawat} - registrasi tanggal ${tgl_registrasi} (hari ini: ${formatLocalDate(today)})`,
+          );
+          continue;
+        }
+
         // Track max event time dalam batch
         if (event_time > batchMaxEventTime) {
           batchMaxEventTime = event_time;
