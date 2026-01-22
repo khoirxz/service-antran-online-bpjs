@@ -30,3 +30,6 @@ pnpm-debug.log*
 # Prisma
 prisma/*.db
 prisma/*.db-journal
+
+# Backup files
+backups/*.json

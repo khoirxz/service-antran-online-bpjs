@@ -33,8 +33,8 @@ export async function fetchRegisterEvents(lastDate: string, lastTime: string) {
       rp.task_id_6,
       rp.task_id_7
     FROM reg_periksa rp
-    LEFT JOIN maping_dokter_dpjpvclaim mpd ON rp.kd_dokter = mpd.kd_dokter
-    LEFT JOIN maping_poli_bpjs mp ON rp.kd_poli = mp.kd_poli_bpjs
+    LEFT JOIN maping_dokter_dpjpvclaim mpd ON rp.kd_dokter = mpd.kd_dokter_lokal
+    LEFT JOIN maping_poli_bpjs mp ON rp.kd_poli = mp.kd_poli_lokal
     LEFT JOIN jadwal j ON rp.kd_dokter = j.kd_dokter 
       AND rp.kd_poli = j.kd_poli 
       AND CASE DAYOFWEEK(rp.tgl_registrasi)
@@ -112,7 +112,7 @@ export async function aggregateRegisterEventsByPoliDokterTanggal(
     rp.tgl_registrasi as tanggal, j.jam_mulai, j.jam_selesai,
     j.kuota as kuota_jkn, COUNT(rp.no_reg) as total_register
     FROM reg_periksa rp 
-    LEFT JOIN maping_poli_bpjs mp ON rp.kd_poli = mp.kd_poli_bpjs 
+    LEFT JOIN maping_poli_bpjs mp ON rp.kd_poli = mp.kd_poli_lokal 
     LEFT JOIN jadwal j ON rp.kd_dokter = j.kd_dokter 
       AND rp.kd_poli = j.kd_poli 
       AND CASE DAYOFWEEK(rp.tgl_registrasi)
