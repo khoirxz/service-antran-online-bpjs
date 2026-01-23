@@ -24,7 +24,7 @@ export async function ensurePollingState(source: string) {
   if (existing) return existing;
 
   // default awal waktu pengambilan data
-  const defaultTime = new Date("2025-01-10T00:00:00Z");
+  const defaultTime = new Date("2026-01-10T00:00:00Z");
   return prisma.pollingState.create({
     data: {
       source,
