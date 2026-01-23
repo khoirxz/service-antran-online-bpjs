@@ -2,11 +2,16 @@
  * HFIS Validator Service
  * Validasi kode dokter dan poli dari snapshot BPJS
  * Dan mengambil data jadwal untuk payload
+ *
+ * Fitur Auto-Fetch:
+ * Jika snapshot tidak ditemukan, akan otomatis fetch dari Khanza
+ * dan simpan ke database lokal (lazy loading)
  */
 
 import prisma from "../lib/prisma";
 import { formatLocalDate } from "../utils/formatDate";
 import { aggregateRegisterEventsByPoliDokterTanggal } from "../khanza/khanza.query";
+import { khanzaDb } from "../khanza/khanza.client";
 
 export interface ValidationResult {
   isValid: boolean;
@@ -44,7 +49,169 @@ export interface ValidationWithData {
 }
 
 /**
+ * Map hari dalam bahasa Indonesia ke day of week
+ */
+const HARI_MAP: Record<string, number> = {
+  MINGGU: 0,
+  SENIN: 1,
+  SELASA: 2,
+  RABU: 3,
+  KAMIS: 4,
+  JUMAT: 5,
+  SABTU: 6,
+};
+
+/**
+ * Auto-fetch jadwal dokter dari Khanza jika tidak ada di snapshot
+ * Lazy loading - hanya fetch saat dibutuhkan
+ */
+async function autoFetchScheduleFromKhanza(
+  poliId: string,
+  dokterId: string,
+  tanggal: string,
+): Promise<boolean> {
+  try {
+    const targetDate = new Date(tanggal);
+    const dayOfWeek = targetDate.getDay();
+
+    // Cari hari kerja yang sesuai
+    const hariKerja = Object.entries(HARI_MAP).find(
+      ([_, dow]) => dow === dayOfWeek,
+    )?.[0];
+
+    if (!hariKerja) {
+      console.log(`⚠️  Tidak bisa menentukan hari kerja untuk ${tanggal}`);
+      return false;
+    }
+
+    // Query jadwal dari Khanza berdasarkan kode BPJS
+    const [rows] = await khanzaDb.query(
+      `
+      SELECT 
+        j.kd_dokter,
+        mpd.kd_dokter_bpjs,
+        mpd.nm_dokter_bpjs as nama_dokter,
+        j.kd_poli,
+        mp.kd_poli_bpjs,
+        mp.nm_poli_bpjs as nama_poli,
+        j.hari_kerja,
+        j.jam_mulai,
+        j.jam_selesai,
+        j.kuota
+      FROM jadwal j
+      LEFT JOIN maping_dokter_dpjpvclaim mpd ON j.kd_dokter = mpd.kd_dokter
+      LEFT JOIN maping_poli_bpjs mp ON j.kd_poli = mp.kd_poli_bpjs
+      WHERE mpd.kd_dokter_bpjs = ?
+      AND mp.kd_poli_bpjs = ?
+      AND UPPER(j.hari_kerja) = ?
+    `,
+      [dokterId, poliId, hariKerja],
+    );
+
+    const jadwalList = rows as any[];
+
+    if (jadwalList.length === 0) {
+      console.log(
+        `⚠️  Tidak ada jadwal di Khanza untuk dokter ${dokterId}, poli ${poliId}, hari ${hariKerja}`,
+      );
+      return false;
+    }
+
+    const now = new Date();
+
+    // Simpan setiap jadwal yang ditemukan
+    for (const jadwal of jadwalList) {
+      const jamMulai = jadwal.jam_mulai || "08:00:00";
+      const jamSelesai = jadwal.jam_selesai || "12:00:00";
+
+      // Cek apakah sudah ada
+      const existing = await prisma.doctorScheduleQuota.findFirst({
+        where: {
+          tanggal: targetDate,
+          poli_id: poliId,
+          dokter_id: dokterId,
+          jam_mulai: jamMulai,
+        },
+      });
+
+      if (!existing) {
+        await prisma.doctorScheduleQuota.create({
+          data: {
+            tanggal: targetDate,
+            poli_id: poliId,
+            dokter_id: dokterId,
+            nama_dokter: jadwal.nama_dokter || "Unknown",
+            nama_poli: jadwal.nama_poli || "Unknown",
+            jam_mulai: jamMulai,
+            jam_selesai: jamSelesai,
+            kuota_jkn: jadwal.kuota || 20,
+            source: "AUTO_FETCH",
+            fetchedAt: now,
+          },
+        });
+        console.log(
+          `✅ Auto-fetch: Jadwal ${poliId}/${dokterId} ${tanggal} ${jamMulai}-${jamSelesai} disimpan`,
+        );
+      }
+    }
+
+    return true;
+  } catch (error: any) {
+    console.error(`❌ Auto-fetch error: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Cari jadwal di snapshot, jika tidak ada auto-fetch dari Khanza
+ */
+async function getOrFetchSchedule(
+  poliId: string,
+  dokterId: string,
+  tanggal: string,
+) {
+  const formattedDate = formatLocalDate(new Date(tanggal));
+  const targetDate = new Date(formattedDate);
+
+  // Cari di snapshot lokal
+  let schedule = await prisma.doctorScheduleQuota.findFirst({
+    where: {
+      poli_id: poliId,
+      dokter_id: dokterId,
+      tanggal: targetDate,
+    },
+  });
+
+  // Jika tidak ada, coba auto-fetch dari Khanza
+  if (!schedule) {
+    console.log(
+      `🔄 Snapshot tidak ditemukan untuk ${poliId}/${dokterId}/${formattedDate}, mencoba auto-fetch...`,
+    );
+
+    const fetched = await autoFetchScheduleFromKhanza(
+      poliId,
+      dokterId,
+      formattedDate,
+    );
+
+    if (fetched) {
+      // Coba cari lagi setelah fetch
+      schedule = await prisma.doctorScheduleQuota.findFirst({
+        where: {
+          poli_id: poliId,
+          dokter_id: dokterId,
+          tanggal: targetDate,
+        },
+      });
+    }
+  }
+
+  return schedule;
+}
+
+/**
  * Validasi apakah dokter dan poli ada di snapshot HFIS untuk tanggal tertentu
+ * Dengan fitur auto-fetch jika snapshot tidak ada
  */
 export async function validateHfisData(
   poliId: string,
@@ -53,20 +220,15 @@ export async function validateHfisData(
 ): Promise<ValidationResult> {
   // format tanggal
   const formattedDate = formatLocalDate(new Date(tanggal));
-  // Cek apakah ada jadwal untuk poli dan dokter ini di tanggal tersebut
-  const schedule = await prisma.doctorScheduleQuota.findFirst({
-    where: {
-      poli_id: poliId,
-      dokter_id: dokterId,
-      tanggal: new Date(formattedDate),
-    },
-  });
+
+  // Cek apakah ada jadwal (dengan auto-fetch jika tidak ada)
+  const schedule = await getOrFetchSchedule(poliId, dokterId, formattedDate);
 
   if (!schedule) {
     return {
       isValid: false,
       status: "BLOCKED_BPJS",
-      blockedReason: `Jadwal dokter ${dokterId} untuk poli ${poliId} pada ${tanggal} tidak ditemukan di snapshot HFIS. Periksa kode dokter/poli atau refresh snapshot.`,
+      blockedReason: `Jadwal dokter ${dokterId} untuk poli ${poliId} pada ${tanggal} tidak ditemukan di Khanza. Periksa mapping kode BPJS di tabel maping_dokter_dpjpvclaim dan maping_poli_bpjs.`,
     };
   }
 
@@ -130,6 +292,7 @@ export async function validateRegistration(
 
 /**
  * Validasi dan ambil data HFIS dalam satu langkah
+ * Dengan fitur auto-fetch jika snapshot tidak ada
  * Menghindari duplikasi query ke DoctorScheduleQuota
  */
 export async function validateAndGetHfisData(
@@ -155,20 +318,14 @@ export async function validateAndGetHfisData(
     };
   }
 
-  // Cari jadwal di snapshot HFIS
-  const schedule = await prisma.doctorScheduleQuota.findFirst({
-    where: {
-      poli_id: poliId,
-      dokter_id: dokterId,
-      tanggal: new Date(formattedDate),
-    },
-  });
+  // Cari jadwal di snapshot HFIS (dengan auto-fetch jika tidak ada)
+  const schedule = await getOrFetchSchedule(poliId, dokterId, formattedDate);
 
   if (!schedule) {
     return {
       isValid: false,
       status: "BLOCKED_BPJS",
-      blockedReason: `Jadwal dokter ${dokterId} untuk poli ${poliId} pada ${tanggal} tidak ditemukan di snapshot HFIS. Periksa kode dokter/poli atau refresh snapshot.`,
+      blockedReason: `Jadwal dokter ${dokterId} untuk poli ${poliId} pada ${tanggal} tidak ditemukan di Khanza. Periksa mapping kode BPJS di tabel maping_dokter_dpjpvclaim dan maping_poli_bpjs.`,
     };
   }
 
@@ -190,6 +347,10 @@ export async function validateAndGetHfisData(
   const sisaKuotaNonJkn = Math.max(0, kuotaNonJkn - totalRegistrasi);
 
   // Return data lengkap dari HFIS
+  // Format jam: "HH:MM:SS" -> "HH:MM"
+  const jamMulaiFormatted = schedule.jam_mulai.substring(0, 5);
+  const jamSelesaiFormatted = schedule.jam_selesai.substring(0, 5);
+
   return {
     isValid: true,
     status: "READY_BPJS",
@@ -199,9 +360,9 @@ export async function validateAndGetHfisData(
       dokter_id: schedule.dokter_id,
       dokter_name: schedule.nama_dokter,
       tanggal: formattedDate,
-      jam_mulai: schedule.jam_mulai,
-      jam_selesai: schedule.jam_selesai,
-      jam_praktek: `${schedule.jam_mulai}-${schedule.jam_selesai}`,
+      jam_mulai: jamMulaiFormatted,
+      jam_selesai: jamSelesaiFormatted,
+      jam_praktek: `${jamMulaiFormatted}-${jamSelesaiFormatted}`,
       kuota_jkn: schedule.kuota_jkn,
       total_registrasi: totalRegistrasi,
       sisa_kuota_jkn: sisaKuotaJkn,

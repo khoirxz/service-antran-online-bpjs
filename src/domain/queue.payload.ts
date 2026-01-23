@@ -69,9 +69,24 @@ export async function buildRegisterPayload(
   // Prioritas jampraktek:
   // 1. Dari payload (hasil polling dengan HFIS)
   // 2. Dari snapshot DoctorScheduleQuota
-  const jampraktek =
-    payloadData?.jam_praktek ||
-    (snapshot ? `${snapshot.jam_mulai}-${snapshot.jam_selesai}` : "");
+  // Format: HH:MM-HH:MM (tanpa detik)
+  let jampraktek = payloadData?.jam_praktek || "";
+
+  if (!jampraktek && snapshot) {
+    // Format jam dari snapshot: "HH:MM:SS" -> "HH:MM"
+    const jamMulai = snapshot.jam_mulai.substring(0, 5);
+    const jamSelesai = snapshot.jam_selesai.substring(0, 5);
+    jampraktek = `${jamMulai}-${jamSelesai}`;
+  }
+
+  // Pastikan format tanpa detik (HH:MM-HH:MM)
+  if (jampraktek && jampraktek.includes(":") && jampraktek.length > 11) {
+    // Format "HH:MM:SS-HH:MM:SS" -> "HH:MM-HH:MM"
+    const parts = jampraktek.split("-");
+    if (parts.length === 2) {
+      jampraktek = `${parts[0].substring(0, 5)}-${parts[1].substring(0, 5)}`;
+    }
+  }
 
   // Validasi: jampraktek wajib ada
   if (!jampraktek) {
