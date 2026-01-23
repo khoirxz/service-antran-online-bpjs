@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express, { Application, Request, Response } from "express";
+import cors from "cors";
 import prisma from "./lib/prisma";
 import healthRoutes from "./api/health.routes";
 import quotaRoutes from "./api/quota.routes";
@@ -12,7 +13,16 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
+// Enable CORS
+// Allow all origins for simplicity; adjust as needed for security
+// Allow http requests from specified origins in production
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  }),
+);
 // Root endpoint
 app.get("/", (req: Request, res: Response) => {
   res.json({ message: "Welcome to Antrol Service API!!" });
