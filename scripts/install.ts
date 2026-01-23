@@ -17,7 +17,7 @@ import prisma from "../src/lib/prisma";
 // ============ CONFIGURATION ============
 const CONFIG = {
   khanza: {
-    host: process.env.KHANZA_DB_HOST || "100.118.107.102",
+    host: process.env.KHANZA_DB_HOST || "localhost",
     user: process.env.KHANZA_DB_USER || "dba",
     password: process.env.KHANZA_DB_PASSWORD || "DBA_Prasetya99",
     database: process.env.KHANZA_DB_NAME || "sik",
