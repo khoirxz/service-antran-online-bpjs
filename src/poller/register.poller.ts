@@ -8,12 +8,14 @@ import {
   commitBatchCursor,
   rollbackBatchCursor,
 } from "../storage/polling.state";
-import {
-  calculateQuota,
-  calculateEstimatedTime,
-} from "../domain/quota.aggregator";
-import { validateRegistration } from "../domain/hfis.validator";
+import { calculateEstimatedTime } from "../domain/quota.aggregator";
+import { validateAndGetHfisData } from "../domain/hfis.validator";
 import { updateTaskProgress } from "../domain/task.progress";
+import {
+  validatePayload,
+  logTaskValidationError,
+  debugLogPayload,
+} from "../domain/task.validator";
 import {
   formatLocalDate,
   createUtcDateFromLocalDateString,
@@ -85,8 +87,8 @@ export async function pollRegisterEvents() {
         }
 
         try {
-          // 1. Validasi data terhadap HFIS
-          const validation = await validateRegistration(
+          // 1. Validasi data terhadap HFIS DAN ambil data jadwal dalam satu langkah
+          const validation = await validateAndGetHfisData(
             row.kd_poli,
             row.kd_dokter,
             tgl_registrasi,
@@ -94,41 +96,84 @@ export async function pollRegisterEvents() {
             row.no_rawat,
           );
 
-          // 2. Jika valid, hitung kuota dan estimasi
-          let quotaInfo = null;
+          // 2. Hitung estimasi waktu dilayani menggunakan data dari HFIS
           let estimasiUnix = 0;
+          const angkaAntrean = parseInt(row.no_reg, 10);
 
-          if (validation.isValid) {
-            quotaInfo = await calculateQuota(
-              row.kd_poli,
-              row.kd_dokter,
-              tgl_registrasi,
-            );
-
-            // Hitung estimasi waktu dilayani
-            const angkaAntrean = parseInt(row.no_reg, 10);
-            const jamMulai = row.jam_mulai.slice(0, 5);
+          if (validation.hfisData) {
+            // Gunakan jam_mulai dari HFIS (source of truth)
             estimasiUnix = calculateEstimatedTime(
               tgl_registrasi,
-              jamMulai,
+              validation.hfisData.jam_mulai,
               angkaAntrean,
             );
           }
 
-          // 3. Build payload snapshot (kuota + estimasi dari polling time)
-          const payload = quotaInfo
-            ? {
-                kuota_jkn: quotaInfo.kuota_jkn,
-                sisa_kuota_jkn: quotaInfo.sisa_kuota_jkn,
-                kuota_nonjkn: quotaInfo.kuota_nonjkn,
-                sisa_kuota_nonjkn: quotaInfo.sisa_kuota_nonjkn,
-                estimasi_dilayani: estimasiUnix,
-                jam_praktek: quotaInfo.jam_praktek,
-              }
-            : Prisma.JsonNull;
+          // 3. Build payload snapshot dari data HFIS (jika valid)
+          const payload = {
+            kuota_jkn: validation.hfisData?.kuota_jkn ?? 0,
+            sisa_kuota_jkn: validation.hfisData?.sisa_kuota_jkn ?? 0,
+            kuota_nonjkn: validation.hfisData?.kuota_nonjkn ?? 0,
+            sisa_kuota_nonjkn: validation.hfisData?.sisa_kuota_nonjkn ?? 0,
+            estimasi_dilayani: estimasiUnix,
+            jam_praktek: validation.hfisData?.jam_praktek ?? "",
+          };
 
-          // 4. Create event dengan task_progress berdasarkan validasi
-          const angkaAntrean = parseInt(row.no_reg, 10);
+          debugLogPayload(
+            row.no_rawat,
+            payload,
+            `REGISTER_${row.kd_poli}_${row.kd_dokter}`,
+          );
+
+          // 4. Validasi payload
+          const payloadValidation = validatePayload(payload);
+          if (!payloadValidation.isValid) {
+            console.warn(
+              `⚠️  Event register ${row.no_rawat} payload invalid: ${payloadValidation.errorMessage}`,
+            );
+            debugLogPayload(row.no_rawat, payload, "VALIDATION_FAILED");
+
+            // Check jika sudah pernah di-log dan di-resolve
+            // Jika sudah di-resolve, arti admin sudah fix masalah → try create VisitEvent
+            const existingLog = await prisma.taskValidationLog.findFirst({
+              where: {
+                visit_id: row.no_rawat,
+                error_reason: payloadValidation.reason,
+              },
+              orderBy: { createdAt: "desc" },
+              take: 1,
+            });
+
+            if (existingLog?.status === "RESOLVED") {
+              // Log sudah di-resolve, lanjutkan create VisitEvent
+              console.log(
+                `✅ Event ${row.no_rawat} error was resolved, proceeding to create VisitEvent`,
+              );
+            } else if (existingLog?.status === "PENDING") {
+              // Masih PENDING, jangan log duplikat
+              console.log(
+                `⏭️  Event ${row.no_rawat} sudah di-log dengan error yang sama (PENDING), skip`,
+              );
+              totalProcessed++;
+              continue;
+            } else {
+              // Belum pernah di-log, log sekarang
+              await logTaskValidationError(
+                row.no_rawat,
+                1,
+                null,
+                null,
+                payloadValidation.reason || "payload_invalid",
+                undefined,
+                payloadValidation.errorMessage,
+              );
+
+              totalProcessed++;
+              continue;
+            }
+          }
+
+          // 5. Create event dengan task_progress berdasarkan validasi
 
           // Buat task_progress untuk REGISTER dengan status hasil validasi
           const taskProgress = updateTaskProgress(
@@ -155,14 +200,14 @@ export async function pollRegisterEvents() {
 
               is_jkn: true,
 
-              payload: payload as Prisma.NullableJsonNullValueInput,
+              payload: payload as any,
               task_progress: taskProgress as any,
             },
           });
 
-          if (validation.isValid) {
+          if (validation.isValid && validation.hfisData) {
             console.log(
-              `✅ Event register ${row.no_rawat} READY_BPJS - kuota: JKN=${quotaInfo?.sisa_kuota_jkn}/${quotaInfo?.kuota_jkn}`,
+              `✅ Event register ${row.no_rawat} READY_BPJS - kuota: JKN=${validation.hfisData.sisa_kuota_jkn}/${validation.hfisData.kuota_jkn}, jam: ${validation.hfisData.jam_praktek}`,
             );
           } else {
             console.warn(

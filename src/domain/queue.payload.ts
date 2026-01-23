@@ -5,25 +5,26 @@
 
 import { VisitEvent } from "@prisma/client";
 import prisma from "../lib/prisma";
+import { getTaskEventTime } from "./task.progress";
 
 interface RegisterPayload {
   kodebooking: string;
-  jenispasien: "NON JKN";
-  nomorkartu: string | null;
-  nik: string | null;
-  nohp: string | null;
+  jenispasien: "JKN" | "NON JKN";
+  nomorkartu: string;
+  nik: string;
+  nohp: string;
   kodepoli: string;
   namapoli: string;
   pasienbaru: 0 | 1;
-  norm: string | null;
+  norm: string;
   tanggalperiksa: string;
-  kodedokter: string;
-  namadokter: string | null;
-  jampraktek: string | null;
+  kodedokter: number; // BPJS expects number, not string
+  namadokter: string;
+  jampraktek: string;
   jeniskunjungan: number;
   nomorreferensi: string;
-  nomorantrean: string | null;
-  angkaantrean: number | null;
+  nomorantrean: string;
+  angkaantrean: number;
   estimasidilayani: number;
   sisakuotajkn: number;
   kuotajkn: number;
@@ -65,8 +66,29 @@ export async function buildRegisterPayload(
   // Ambil quota info dari payload snapshot (saved during polling)
   const payloadData = event.payload as Record<string, any>;
 
-  // TODO: Fetch jenis_kunjungan from HFIS if needed
-  // const jenisKunjunganFromHFIS = await fetchJenisKunjungan(event.poli_id, event.no_rkm_medis);
+  // Prioritas jampraktek:
+  // 1. Dari payload (hasil polling dengan HFIS)
+  // 2. Dari snapshot DoctorScheduleQuota
+  const jampraktek =
+    payloadData?.jam_praktek ||
+    (snapshot ? `${snapshot.jam_mulai}-${snapshot.jam_selesai}` : "");
+
+  // Validasi: jampraktek wajib ada
+  if (!jampraktek) {
+    throw new Error(
+      `Data jadwal tidak ditemukan untuk poli ${event.poli_id}, dokter ${event.dokter_id}, tanggal ${event.tanggal.toISOString().slice(0, 10)}. Pastikan snapshot HFIS sudah di-sync.`,
+    );
+  }
+
+  // Konversi kodedokter ke number (BPJS requirement)
+  const kodedokterStr = snapshot ? snapshot.dokter_id : event.dokter_id;
+  const kodedokter = parseInt(kodedokterStr, 10);
+
+  if (isNaN(kodedokter)) {
+    throw new Error(
+      `Kode dokter "${kodedokterStr}" tidak valid (harus berupa angka)`,
+    );
+  }
 
   // Build payload
   return {
@@ -78,15 +100,11 @@ export async function buildRegisterPayload(
     kodepoli: event.poli_id,
     namapoli: poli.nama,
     pasienbaru: 0, // TODO: ambil dari Khanza
-    norm: event.no_rkm_medis, // Essential data from SIMRS
+    norm: event.no_rkm_medis ?? "-", // Essential data from SIMRS
     tanggalperiksa: event.tanggal.toISOString().slice(0, 10),
-    kodedokter: snapshot ? snapshot.dokter_id : event.dokter_id,
+    kodedokter, // number, bukan string
     namadokter: snapshot ? snapshot.nama_dokter : "-",
-    jampraktek:
-      payloadData?.jam_praktek ??
-      (snapshot
-        ? `${snapshot.jam_mulai ?? ""}-${snapshot.jam_selesai ?? ""}`
-        : ""),
+    jampraktek,
     jeniskunjungan: payloadData?.jeniskunjungan ?? 3, // TODO: fetch from HFIS if needed
     nomorreferensi: "",
     nomorantrean: event.nomor_antrean ?? "",
@@ -101,15 +119,17 @@ export async function buildRegisterPayload(
 }
 
 /**
- * Build UPDATE payload untuk task 3, 4, 5, 7
+ * Build UPDATE payload untuk task 3, 4, 5, 6, 7
  *
  * Task payload sederhana:
  * - Task 3 (CHECKIN): pasien tiba di poli
  * - Task 4 (START): dokter mulai periksa
  * - Task 5 (FINISH): dokter selesai periksa
+ * - Task 6 (PHARMACY_STARTED): mulai farmasi buat obat
  * - Task 7 (CLOSE): obat selesai dibuat
  *
  * Format sama untuk semua: kodebooking + taskid + waktu (timestamp millisecond)
+ * Waktu diambil dari task_progress[taskId].event_time (waktu task dari Khanza)
  */
 export async function buildTaskUpdatePayload(
   event: VisitEvent,
@@ -119,9 +139,24 @@ export async function buildTaskUpdatePayload(
   taskid: number;
   waktu: number;
 }> {
+  // Ambil event_time dari task_progress (waktu task dari Khanza)
+  const taskEventTimeStr = getTaskEventTime(event.task_progress, taskid);
+
+  let waktu: number;
+  if (taskEventTimeStr) {
+    // Gunakan waktu task yang sudah disimpan di task_progress
+    waktu = new Date(taskEventTimeStr).getTime();
+  } else {
+    // Fallback ke event_time (waktu registrasi) jika event_time task tidak ada
+    console.warn(
+      `⚠️  Task ${taskid} untuk ${event.visit_id} tidak memiliki event_time, fallback ke waktu registrasi`,
+    );
+    waktu = event.event_time.getTime();
+  }
+
   return {
     kodebooking: event.visit_id,
     taskid,
-    waktu: event.event_time.getTime(),
+    waktu,
   };
 }

@@ -35,22 +35,12 @@ export async function processQueueJob() {
     // Send ke BPJS
     const response = await sendToBpjs(endpoint, job.payload);
 
-    // Log response
-    await prisma.bpjsAntreanLogs.create({
-      data: {
-        queue_id: job.id,
-        request_payload: job.payload || {},
-        response_payload: response.data,
-        http_code: response.status,
-      },
-    });
-
     // Cek response code
     const responseCode = response.data?.metadata?.code;
 
     // 200 = sukses, 208 = duplikasi (juga dianggap sukses)
     if (responseCode === 200 || responseCode === 208) {
-      // Update job status ke SEND
+      // Update job status ke SEND TERLEBIH DAHULU
       await prisma.bpjsAntreanQueue.update({
         where: { id: job.id },
         data: {
@@ -58,6 +48,24 @@ export async function processQueueJob() {
           sentAt: new Date(),
         },
       });
+
+      // Log response SETELAH job status berhasil terupdate
+      // Jika create logs gagal, job sudah SEND jadi tidak akan diretry lagi
+      try {
+        await prisma.bpjsAntreanLogs.create({
+          data: {
+            queue_id: job.id,
+            request_payload: job.payload || {},
+            response_payload: response.data || {},
+            http_code: response.status,
+          },
+        });
+      } catch (logError: any) {
+        console.warn(
+          `⚠️  Failed to log response for job ${job.visit_id}, but job marked as SENT:`,
+          logError.message,
+        );
+      }
 
       // Update VisitEvent dengan task_progress
       const visitEvent = await prisma.visitEvent.findUnique({

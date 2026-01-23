@@ -605,4 +605,178 @@ router.get("/queue/stats", async (req, res) => {
   }
 });
 
+/**
+ * GET /admin/validation/errors
+ * Lihat data validation errors (payload_kuota_missing, payload_jadwal_missing, dll)
+ * Query params: reason, limit, offset, startDate, endDate
+ */
+router.get("/validation/errors", async (req, res) => {
+  try {
+    const {
+      reason,
+      limit = "50",
+      offset = "0",
+      startDate,
+      endDate,
+    } = req.query;
+
+    // Build where clause
+    const whereClause: any = {
+      status: "PENDING",
+    };
+
+    if (reason) {
+      whereClause.error_reason = reason;
+    }
+
+    if (startDate || endDate) {
+      whereClause.createdAt = {};
+      if (startDate) {
+        whereClause.createdAt.gte = new Date(`${startDate}T00:00:00Z`);
+      }
+      if (endDate) {
+        whereClause.createdAt.lte = new Date(`${endDate}T23:59:59Z`);
+      }
+    }
+
+    const errors = await prisma.taskValidationLog.findMany({
+      where: whereClause,
+      orderBy: { createdAt: "desc" },
+      skip: parseInt(offset as string),
+      take: parseInt(limit as string),
+    });
+
+    const total = await prisma.taskValidationLog.count({
+      where: whereClause,
+    });
+
+    // Group by reason for summary
+    const summary = await prisma.taskValidationLog.groupBy({
+      by: ["error_reason"],
+      where: whereClause,
+      _count: { id: true },
+    });
+
+    res.json(
+      serializeBigInt({
+        total,
+        data: errors,
+        summary: summary.map((s) => ({
+          error_reason: s.error_reason,
+          count: s._count.id || 0,
+        })),
+        filters: {
+          reason: reason || null,
+          startDate: startDate || null,
+          endDate: endDate || null,
+        },
+        pagination: {
+          limit: parseInt(limit as string),
+          offset: parseInt(offset as string),
+          hasMore:
+            total > parseInt(offset as string) + parseInt(limit as string),
+        },
+      }),
+    );
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /admin/validation/:logId/resolve
+ * Resolve validation error (untuk retry event setelah fix)
+ *
+ * Usage:
+ * - Admin lihat error di dashboard
+ * - Admin perbaiki masalah (refresh snapshot, dll)
+ * - Admin mark as resolved → event bisa di-create ulang saat poller jalan
+ */
+router.post("/validation/:logId/resolve", async (req, res) => {
+  try {
+    const { logId } = req.params;
+    const { notes } = req.body;
+
+    const log = await prisma.taskValidationLog.findUnique({
+      where: { id: BigInt(logId) },
+    });
+
+    if (!log) {
+      return res.status(404).json({ error: "Validation log tidak ditemukan" });
+    }
+
+    if (log.status !== "PENDING") {
+      return res.status(400).json({
+        error: `Log status bukan PENDING (current: ${log.status})`,
+      });
+    }
+
+    // Mark as RESOLVED
+    const resolved = await prisma.taskValidationLog.update({
+      where: { id: BigInt(logId) },
+      data: {
+        status: "RESOLVED",
+        resolved_at: new Date(),
+        notes: notes || "Marked as resolved by admin",
+      },
+    });
+
+    res.json(
+      serializeBigInt({
+        message: `Validation error ${logId} marked as RESOLVED`,
+        error_reason: resolved.error_reason,
+        visit_id: resolved.visit_id,
+        notes: resolved.notes,
+      }),
+    );
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /admin/validation/summary
+ * Ringkasan validation errors berdasarkan reason
+ */
+router.get("/validation/summary", async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    const whereClause: any = {};
+    if (startDate || endDate) {
+      whereClause.createdAt = {};
+      if (startDate) {
+        whereClause.createdAt.gte = new Date(`${startDate}T00:00:00Z`);
+      }
+      if (endDate) {
+        whereClause.createdAt.lte = new Date(`${endDate}T23:59:59Z`);
+      }
+    }
+
+    const summary = await prisma.taskValidationLog.groupBy({
+      by: ["error_reason", "status"],
+      where: whereClause,
+      _count: { id: true },
+    });
+
+    const formatted: Record<string, Record<string, number>> = {};
+    summary.forEach((item) => {
+      if (!formatted[item.error_reason]) {
+        formatted[item.error_reason] = {};
+      }
+      formatted[item.error_reason][item.status] = item._count?.id || 0;
+    });
+
+    res.json({
+      filters: {
+        startDate: startDate || null,
+        endDate: endDate || null,
+      },
+      summary: formatted,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

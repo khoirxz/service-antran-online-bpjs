@@ -24,7 +24,8 @@ export async function ensurePollingState(source: string) {
   if (existing) return existing;
 
   // default start time far in the past
-  const defaultTime = new Date("2000-01-01T00:00:00Z");
+  // debug
+  const defaultTime = new Date("2025-01-20T00:00:00Z");
   return prisma.pollingState.create({
     data: {
       source,

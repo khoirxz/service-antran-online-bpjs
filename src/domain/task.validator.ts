@@ -24,6 +24,11 @@ export type TaskValidationReason =
   | "close_register_not_sent" // Task 7 diterima tapi task 1 (REGISTER) belum SENT_BPJS
   | "close_finish_not_sent" // Task 7 diterima tapi task 5 (FINISH) belum SENT_BPJS
 
+  // Payload validation issues
+  | "payload_kuota_missing" // Kuota tidak ada atau 0 di snapshot
+  | "payload_jadwal_missing" // Jadwal dokter tidak ada di snapshot
+  | "payload_invalid" // Payload incomplete or corrupt
+
   // Generic issues
   | "out_of_order" // Task diterima tidak sesuai urutan
   | "unknown";
@@ -193,6 +198,120 @@ export async function ignoreValidationIssue(logId: bigint, notes?: string) {
     },
   });
 
-  console.log(`⏭️  Validation issue ${logId} marked as ignored`);
+  console.log(`✅ Validation issue ${logId} marked as ignored`);
   return ignored;
+}
+
+/**
+ * Payload interface untuk payload snapshot di VisitEvent
+ * Disimpan di database untuk tracking & rollback jika ada error
+ */
+export interface PayloadSnapshot {
+  kd_dokter?: string;
+  nama_dokter?: string;
+  kd_poli?: string;
+  nama_poli?: string;
+  jam_praktek?: string; // Format: "HH:MM-HH:MM"
+  kuota_jkn?: number;
+  estimasi_dilayani?: number; // Unix timestamp
+  tgl_registrasi?: string;
+  jam_registrasi?: string;
+  no_rkm_medis?: string;
+  [key: string]: any;
+}
+
+/**
+ * Log payload data untuk debugging
+ * Menampilkan struktur data yang diterima dari KHANZA
+ */
+export function debugLogPayload(
+  visitId: string,
+  payload: Record<string, any> | null,
+  context?: string,
+): void {
+  console.log(`\n📊 === PAYLOAD DEBUG (${context || "general"}) ===`);
+  console.log(`Visit ID: ${visitId}`);
+
+  if (!payload) {
+    console.log("⚠️  Payload: NULL atau undefined");
+    return;
+  }
+
+  console.log("Struktur Payload:", {
+    kd_dokter: payload.kd_dokter,
+    nama_dokter: payload.nama_dokter,
+    kd_poli: payload.kd_poli,
+    nama_poli: payload.nama_poli,
+    jam_praktek: payload.jam_praktek,
+    kuota_jkn: payload.kuota_jkn,
+    estimasi_dilayani: payload.estimasi_dilayani,
+    tgl_registrasi: payload.tgl_registrasi,
+    jam_registrasi: payload.jam_registrasi,
+    no_rkm_medis: payload.no_rkm_medis,
+  });
+
+  // Log semua field untuk debugging
+  const allKeys = Object.keys(payload);
+  if (allKeys.length > 10) {
+    console.log(`📋 Total fields: ${allKeys.length}`);
+    console.log("Semua fields:", allKeys);
+  }
+
+  console.log(`=== END PAYLOAD DEBUG ===\n`);
+}
+
+/**
+ * Validate payload untuk REGISTER
+ * Returns { isValid, reason } untuk block data jika payload invalid
+ *
+ * NOTE: Validasi LENIENT - data tetap dimasukkan ke VisitEvent walaupun payload imperfect
+ * Hanya reject jika benar-benar tidak bisa diproses ke BPJS
+ * - Kuota 0 tetap OK (queue penuh, tapi pasien bisa tunggu)
+ * - Jadwal kosong tetap OK (fallback ke jadwal default)
+ * - Estimasi 0 tetap OK (fallback ke waktu default)
+ */
+export function validatePayload(payload: Record<string, any> | null): {
+  isValid: boolean;
+  reason?: TaskValidationReason;
+  errorMessage?: string;
+} {
+  // HANYA reject jika payload benar2 null (data tidak ada sama sekali)
+  if (!payload || typeof payload !== "object") {
+    return {
+      isValid: false,
+      reason: "payload_invalid",
+      errorMessage:
+        "Payload kosong/corrupt (tidak bisa mengakses data dari Khanza)",
+    };
+  }
+
+  // Cek field-field kritis yang HARUS ada untuk BPJS
+  // Jika ada minimal 1 field yang menunjukkan kuota/jadwal diambil, accept payload
+  const hasValidKuota = typeof payload.kuota_jkn === "number";
+  const hasValidJadwal = typeof payload.jam_praktek === "string";
+  const hasValidEstimasi = typeof payload.estimasi_dilayani === "number";
+
+  // Jika semua field penting tersedia (walaupun mungkin bernilai 0 atau kosong), accept
+  if (hasValidKuota || hasValidJadwal || hasValidEstimasi) {
+    return { isValid: true };
+  }
+
+  // Jika sedikit pun data ada, accept (kemungkinan fallback values)
+  const hasAnySupportingData =
+    payload.kd_dokter ||
+    payload.kd_poli ||
+    payload.tgl_registrasi ||
+    payload.jam_registrasi;
+
+  if (hasAnySupportingData) {
+    return { isValid: true };
+  }
+
+  // Hanya reject jika benar2 payload kosong
+  return {
+    isValid: false,
+    reason: "payload_invalid",
+    errorMessage:
+      "Payload tidak memiliki data apapun (kode poli/dokter/tanggal kosong)",
+  };
 }

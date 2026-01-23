@@ -73,6 +73,8 @@ export async function pollTaskId3Event() {
             existingEvent.task_progress,
             3,
             "DRAFT",
+            undefined,
+            event_time.toISOString(), // Simpan waktu task dari Khanza
           );
 
           await prisma.visitEvent.update({

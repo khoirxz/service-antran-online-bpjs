@@ -12,6 +12,7 @@ export interface TaskProgress {
   // REGISTER (task_id=1): all states
   // Tasks 3/4/5: DRAFT, SENT_BPJS, FAILED_BPJS only
   status: "DRAFT" | "READY_BPJS" | "BLOCKED_BPJS" | "SENT_BPJS" | "FAILED_BPJS";
+  event_time?: string; // ISO string waktu task terjadi dari Khanza (untuk task 3,4,5,6,7)
   blocked_reason?: string; // Only for REGISTER validation failures
   sentAt?: string; // When sent to BPJS
   failedReason?: string; // Why submission/validation failed
@@ -34,17 +35,24 @@ export function getTaskProgress(progressJson: any): TaskProgressMap {
 
 /**
  * Update task progress untuk task_id tertentu
+ * @param eventTime - ISO string waktu task terjadi dari Khanza (untuk task 3,4,5,6,7)
  */
 export function updateTaskProgress(
   currentProgress: any,
   taskId: number,
   status: "DRAFT" | "READY_BPJS" | "BLOCKED_BPJS" | "SENT_BPJS" | "FAILED_BPJS",
   reason?: string,
+  eventTime?: string,
 ): TaskProgressMap {
   const progress = getTaskProgress(currentProgress);
 
+  // Preserve existing event_time if already set
+  const existingEventTime = progress[taskId.toString()]?.event_time;
+
   progress[taskId.toString()] = {
     status,
+    ...(eventTime && { event_time: eventTime }),
+    ...(!eventTime && existingEventTime && { event_time: existingEventTime }),
     ...(status === "SENT_BPJS" && { sentAt: new Date().toISOString() }),
     ...(status === "BLOCKED_BPJS" &&
       taskId === 1 && { blocked_reason: reason }),
@@ -93,4 +101,16 @@ export function getTaskStatus(
   | undefined {
   const progress = getTaskProgress(currentProgress);
   return progress[taskId.toString()]?.status;
+}
+
+/**
+ * Get task event_time (waktu task terjadi dari Khanza)
+ * @returns ISO string atau undefined jika tidak ada
+ */
+export function getTaskEventTime(
+  currentProgress: any,
+  taskId: number,
+): string | undefined {
+  const progress = getTaskProgress(currentProgress);
+  return progress[taskId.toString()]?.event_time;
 }
