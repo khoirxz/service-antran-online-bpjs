@@ -112,8 +112,9 @@ export async function buildRegisterPayload(
     estimasidilayani: payloadData?.estimasi_dilayani ?? 0, // Unix timestamp from polling
     sisakuotajkn: payloadData?.sisa_kuota_jkn ?? 0,
     kuotajkn: payloadData?.kuota_jkn ?? 0,
-    sisakuotanonjkn: payloadData?.sisa_kuota_nonjkn ?? 0,
-    kuotanonjkn: payloadData?.kuota_nonjkn ?? 0,
+    sisakuotanonjkn:
+      payloadData?.sisa_kuota_nonjkn ?? payloadData?.sisa_kuota_jkn ?? 0,
+    kuotanonjkn: payloadData?.kuota_nonjkn ?? payloadData?.kuota_jkn ?? 0,
     keterangan: "Harap hadir 30 menit lebih awal",
   };
 }
