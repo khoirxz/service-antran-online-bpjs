@@ -7,6 +7,9 @@ import {
 } from "../domain/task.validator";
 import prisma from "../lib/prisma";
 import { serializeBigInt } from "../utils/bigInt";
+import { fetchTaskId } from "../khanza/khanza.query";
+import { updateTaskProgress } from "../domain/task.progress";
+import { createUtcDateTimeFromLocal } from "../utils/formatDate";
 
 // Config
 const PAGINATION_CONFIG = {
@@ -322,6 +325,190 @@ router.get(
       return res.status(500).json({
         success: false,
         message: "Failed to fetch validation history",
+        error: (error as Error).message,
+      });
+    }
+  },
+);
+
+/**
+ * POST /admin/events/:visitId/revalidate
+ * Revalidate dan resync task dari Khanza untuk visit tertentu
+ * - Fetch ulang task_id dari Khanza
+ * - Update task_progress di VisitEvent
+ * - Hapus queue FAILED/PENDING untuk rebuild
+ */
+router.post(
+  "/events/:visitId/revalidate",
+  async (req: Request, res: Response) => {
+    try {
+      const visitId = ensureString(req.params.visitId);
+
+      if (!visitId) {
+        return res.status(400).json({
+          success: false,
+          message: "visitId wajib diisi",
+        });
+      }
+
+      // Cari VisitEvent
+      const visitEvent = await prisma.visitEvent.findUnique({
+        where: { visit_id: visitId },
+      });
+
+      if (!visitEvent) {
+        return res.status(404).json({
+          success: false,
+          message: `VisitEvent ${visitId} tidak ditemukan`,
+        });
+      }
+
+      const results: {
+        task: number;
+        action: string;
+        eventTime?: string;
+      }[] = [];
+
+      // Fetch task 3-7 dari Khanza untuk visit ini
+      const taskIds = [3, 4, 5, 6, 7] as const;
+
+      for (const taskId of taskIds) {
+        try {
+          // Query Khanza untuk task ini - menggunakan cursor sangat awal
+          const rows = await fetchTaskId(taskId, "2000-01-01 00:00:00");
+
+          // Cari row yang match dengan visitId
+          const matchedRow = rows.find((r) => r.no_rawat === visitId);
+
+          if (matchedRow && matchedRow.event_time) {
+            // Parse event time - bisa Date object atau string
+            const eventTimeRaw = matchedRow.event_time as unknown;
+            const eventTimeStr =
+              eventTimeRaw instanceof Date
+                ? eventTimeRaw.toISOString()
+                : String(matchedRow.event_time);
+
+            const dateStr = eventTimeStr.slice(0, 10);
+            const timeStr = eventTimeStr.slice(11, 19);
+            const eventTime = createUtcDateTimeFromLocal(dateStr, timeStr);
+
+            // Update task_progress
+            const newProgress = updateTaskProgress(
+              visitEvent.task_progress,
+              taskId,
+              "DRAFT",
+              undefined,
+              eventTime.toISOString(),
+            );
+
+            await prisma.visitEvent.update({
+              where: { visit_id: visitId },
+              data: { task_progress: newProgress as any },
+            });
+
+            // Hapus queue lama untuk task ini (jika ada)
+            await prisma.bpjsAntreanQueue.deleteMany({
+              where: {
+                visit_id: visitId,
+                task_id: taskId,
+                status: { in: ["PENDING", "FAILED"] },
+              },
+            });
+
+            results.push({
+              task: taskId,
+              action: "UPDATED",
+              eventTime: eventTime.toISOString(),
+            });
+          } else {
+            results.push({
+              task: taskId,
+              action: "NOT_FOUND_IN_KHANZA",
+            });
+          }
+        } catch (error: any) {
+          results.push({
+            task: taskId,
+            action: `ERROR: ${error.message}`,
+          });
+        }
+      }
+
+      // Clear validation logs untuk visit ini
+      await prisma.taskValidationLog.updateMany({
+        where: {
+          visit_id: visitId,
+          status: "PENDING",
+        },
+        data: {
+          status: "RESOLVED",
+          resolved_at: new Date(),
+          notes: "Auto-resolved via revalidate API",
+        },
+      });
+
+      // Ambil data terbaru
+      const updatedEvent = await prisma.visitEvent.findUnique({
+        where: { visit_id: visitId },
+      });
+
+      return res.json(
+        serializeBigInt({
+          success: true,
+          message: "Revalidation completed",
+          visitId,
+          results,
+          task_progress: updatedEvent?.task_progress,
+        }),
+      );
+    } catch (error) {
+      console.error("Failed to revalidate:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to revalidate",
+        error: (error as Error).message,
+      });
+    }
+  },
+);
+
+/**
+ * POST /admin/events/:visitId/rebuild-queue
+ * Rebuild queue untuk visit tertentu (task yang DRAFT akan di-queue ulang)
+ */
+router.post(
+  "/events/:visitId/rebuild-queue",
+  async (req: Request, res: Response) => {
+    try {
+      const visitId = ensureString(req.params.visitId);
+
+      if (!visitId) {
+        return res.status(400).json({
+          success: false,
+          message: "visitId wajib diisi",
+        });
+      }
+
+      // Hapus queue PENDING/FAILED untuk visit ini
+      const deleted = await prisma.bpjsAntreanQueue.deleteMany({
+        where: {
+          visit_id: visitId,
+          status: { in: ["PENDING", "FAILED"] },
+        },
+      });
+
+      // Queue builder akan otomatis rebuild pada cycle berikutnya
+      return res.json({
+        success: true,
+        message: `Deleted ${deleted.count} queue items. Queue akan di-rebuild pada cycle berikutnya.`,
+        visitId,
+        deletedCount: deleted.count,
+      });
+    } catch (error) {
+      console.error("Failed to rebuild queue:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to rebuild queue",
         error: (error as Error).message,
       });
     }

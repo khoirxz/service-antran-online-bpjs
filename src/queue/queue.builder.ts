@@ -19,40 +19,25 @@ import {
  * - UPDATE (task_id 3/4/5) untuk CHECKIN/START/FINISH (tracked dalam task_progress)
  */
 export async function buildQueue() {
-  // 1) REGISTER events (READY_BPJS)
-  const registerEvents = await prisma.visitEvent.findMany({
-    where: {
-      is_jkn: true,
-    },
-    orderBy: { event_time: "asc" },
-    take: 100,
-  });
+  // 1) REGISTER events (READY_BPJS yang belum di-queue)
+  const registerEvents = (await prisma.$queryRaw`
+    SELECT *
+    FROM VisitEvent v
+    WHERE v.is_jkn = true
+    AND JSON_EXTRACT(v.task_progress, '$."1".status') = 'READY_BPJS'
+    AND NOT EXISTS (
+      SELECT 1 FROM BpjsAntreanQueue q 
+      WHERE q.visit_id = v.visit_id AND q.task_id = 1
+    )
+    ORDER BY v.event_time DESC
+  `) as any[];
 
   console.log(
-    `📦 Checking ${registerEvents.length} events for REGISTER queueing`,
+    `📦 Found ${registerEvents.length} READY_BPJS events ready for queueing`,
   );
 
   for (const event of registerEvents) {
-    const progress = getTaskProgress(event.task_progress);
-    const registerStatus = progress["1"]?.status;
-
-    // Skip jika bukan READY_BPJS
-    if (registerStatus !== "READY_BPJS") continue;
-
     const task_id = 1;
-
-    const exists = await prisma.bpjsAntreanQueue.findUnique({
-      where: {
-        visit_id_task_id: { visit_id: event.visit_id, task_id },
-      },
-    });
-
-    if (exists) {
-      console.log(
-        `⏭️  Event ${event.visit_id} sudah ada di queue (status: ${exists.status})`,
-      );
-      continue;
-    }
 
     try {
       const payload = await buildRegisterPayload(event);
@@ -77,36 +62,41 @@ export async function buildQueue() {
     }
   }
 
-  // 2) UPDATE events (CHECKIN/START/FINISH from task_progress)
-  const updateEvents = await prisma.visitEvent.findMany({
-    orderBy: { event_time: "asc" },
-    take: 500,
-  });
-
-  console.log(
-    `🕒 Found ${updateEvents.length} total events, checking task_progress...`,
-  );
-
-  // Task IDs to check: 3=CHECKIN, 4=START, 5=FINISH, 6=PHARMACY_STARTED, 7=CLOSE
+  // 2) UPDATE events (task 3/4/5/6/7 yang DRAFT dan belum di-queue)
   const updateTaskIds = [3, 4, 5, 6, 7];
 
-  for (const event of updateEvents) {
-    const progress = getTaskProgress(event.task_progress);
+  for (const task_id of updateTaskIds) {
+    // Ambil events yang mungkin punya task ini (recent 200 events)
+    const candidateEvents = await prisma.visitEvent.findMany({
+      orderBy: { event_time: "desc" },
+      take: 200,
+    });
 
-    for (const task_id of updateTaskIds) {
-      const taskStatus = progress[task_id.toString()];
+    const updateEvents = candidateEvents.filter((event) => {
+      const progress = getTaskProgress(event.task_progress);
+      return progress[task_id.toString()] != null; // Ada task ini dalam progress
+    });
 
-      // Skip jika task belum DRAFT (tidak ada record)
-      if (!taskStatus) continue;
+    // Filter yang belum ada di queue
+    const visitIds = updateEvents.map((e) => e.visit_id);
+    const existingQueues = await prisma.bpjsAntreanQueue.findMany({
+      where: {
+        visit_id: { in: visitIds },
+        task_id: task_id,
+      },
+      select: { visit_id: true },
+    });
 
-      const exists = await prisma.bpjsAntreanQueue.findUnique({
-        where: {
-          visit_id_task_id: { visit_id: event.visit_id, task_id },
-        },
-      });
+    const existingVisitIds = new Set(existingQueues.map((q) => q.visit_id));
+    const filteredEvents = updateEvents.filter(
+      (e) => !existingVisitIds.has(e.visit_id),
+    );
 
-      if (exists) continue;
+    console.log(
+      `🕒 Found ${filteredEvents.length} events with task ${task_id} ready for queueing`,
+    );
 
+    for (const event of filteredEvents) {
       // Pastikan REGISTER sudah berhasil dikirim
       const registerQueue = await prisma.bpjsAntreanQueue.findUnique({
         where: {
